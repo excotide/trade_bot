@@ -1,0 +1,7 @@
+binance-futures-connector
+pandas
+pandas-ta
+scikit-learn
+python-dotenv
+requests
+supabase

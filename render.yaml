@@ -1,0 +1,6 @@
+services:
+  - type: worker
+    name: scalp-ai-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python trade_futures_bot.py

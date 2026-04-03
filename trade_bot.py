@@ -40,15 +40,41 @@ exchange_trade.set_sandbox_mode(True)
 # ==========================================
 SIMBOL = 'BTC/USDT'
 TIMEFRAME = '5m'       
-BATAS_RISIKO_USD = 2.0  
+UKURAN_LOT = 0.005         # <-- Setel lot manual
 AMBANG_BATAS_TEKNIKAL = 70 
 AMBANG_BATAS_AI = 60.0      
 
 sedang_ada_posisi = False
 harga_entry_sekarang = 0
-lot_sekarang, tp_sekarang, sl_sekarang = 0, 0, 0
+lot_sekarang = 0
+
+# --- VARIABEL HYBRID TRAILING SL ---
+id_order_sl_server = None
+harga_sl_server_saat_ini = 0
+harga_tertinggi_posisi = 0
+atr_posisi = 0
+
 model_ai_global = None 
 fitur_ai = ['RSI', 'MACD_Line', 'MACD_Hist', 'Jarak_ke_EMA', 'volume']
+
+# ==========================================
+# FUNGSI BARU: PASANG SL DI SERVER BINANCE
+# ==========================================
+def pasang_sl_server(harga_sl):
+    try:
+        # Menggunakan STOP_LOSS_LIMIT untuk Spot Market Binance
+        order = exchange_trade.create_order(
+            symbol=SIMBOL,
+            type='STOP_LOSS_LIMIT',
+            side='sell',
+            amount=lot_sekarang,
+            price=harga_sl, # Limit price
+            params={'stopPrice': harga_sl, 'timeInForce': 'GTC'}
+        )
+        return order['id']
+    except Exception as e:
+        print(f"❌ Gagal pasang SL di server: {e}")
+        return None
 
 # ==========================================
 # 3. FUNGSI LOG, WIN RATE & PROTEKSI
@@ -64,7 +90,7 @@ def simpan_ke_csv(data_trade):
 def hitung_win_rate():
     file_name = 'history_transaksi.csv'
     if not os.path.isfile(file_name):
-        return 0, 0, 0.0 # Total Trade, Win, Win Rate
+        return 0, 0, 0.0 
     try:
         df_history = pd.read_csv(file_name)
         if df_history.empty: return 0, 0, 0.0
@@ -193,10 +219,10 @@ def hitung_skor_teknikal(bar):
     return total_skor, rincian
 
 # ==========================================
-# 7. LOOP UTAMA (TRIPLE ENGINE)
+# 7. LOOP UTAMA (TRIPLE ENGINE + HYBRID TRAILING)
 # ==========================================
 model_ai_global = latih_ai_diawal()
-print(f"\n🚀 Bot v7.2 DASHBOARD EDITION Aktif di {SIMBOL}...")
+print(f"\n🚀 Bot v7.2 HYBRID TRAILING EDITION Aktif di {SIMBOL}...")
 
 while True:
     try:
@@ -207,37 +233,65 @@ while True:
         if df is not None:
             harga_skrg = df.iloc[-1]['close']
             
+            # --- JIKA SEDANG ADA POSISI (MODE PELACAKAN) ---
             if sedang_ada_posisi:
-                orders = exchange_trade.fetch_open_orders(SIMBOL)
-                if len(orders) == 0:
-                    harga_exit = exchange_data.fetch_ticker(SIMBOL)['last']
-                    pnl_akhir = (harga_exit - harga_entry_sekarang) * lot_sekarang
-                    simpan_ke_csv({'Waktu': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'Simbol': SIMBOL, 'Side': 'LONG', 'Entry': harga_entry_sekarang, 'Exit': harga_exit, 'Lot': lot_sekarang, 'PnL_USD': round(pnl_akhir, 2), 'Status': 'CLOSED_BY_OCO'})
-                    print("\n🔔 Order OCO (TP/SL) telah tereksekusi! History dicatat.")
-                    sedang_ada_posisi = False
-                else:
-                    profit_usd = (harga_skrg - harga_entry_sekarang) * lot_sekarang
-                    tanda = "+" if profit_usd >= 0 else ""
-                    print(f"\n⏳ POSISI AKTIF | Profit: {tanda}${profit_usd:.2f}")
-                    print(f"   Live  : ${harga_skrg:.2f}  (Entry: ${harga_entry_sekarang:.2f})")
-                    print(f"   TP    : ${tp_sekarang:.2f}  |  SL: ${sl_sekarang:.2f}")
-                    time.sleep(1) 
+                # 1. Cek apakah SL di server sudah tereksekusi
+                if id_order_sl_server:
+                    try:
+                        order_info = exchange_trade.fetch_order(id_order_sl_server, SIMBOL)
+                        if order_info['status'] == 'closed' or order_info['status'] == 'canceled':
+                            harga_exit = order_info['average'] if order_info.get('average') else harga_sl_server_saat_ini
+                            pnl_akhir = (harga_exit - harga_entry_sekarang) * lot_sekarang
+                            simpan_ke_csv({'Waktu': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'Simbol': SIMBOL, 'Side': 'LONG', 'Entry': harga_entry_sekarang, 'Exit': harga_exit, 'Lot': lot_sekarang, 'PnL_USD': round(pnl_akhir, 2), 'Status': 'CLOSED_BY_TRAILING_SL'})
+                            
+                            print(f"\n🔔 POSISI CLOSED! Terkena SL di Server (Profit Terakhir: ${pnl_akhir:.2f})")
+                            sedang_ada_posisi = False
+                            id_order_sl_server = None
+                            continue
+                    except Exception as e:
+                        pass # Abaikan jika gagal cek API sesaat
+
+                # 2. Update Harga Tertinggi & Geser SL (Trailing)
+                if harga_skrg > harga_tertinggi_posisi:
+                    harga_tertinggi_posisi = harga_skrg
+                    
+                    # Calon SL Baru: Puncak dikurangi 0.5x ATR
+                    calon_sl_baru = round(harga_tertinggi_posisi - (0.5 * atr_posisi), 2)
+                    
+                    if calon_sl_baru > harga_sl_server_saat_ini:
+                        print(f"🔄 Menggeser Garis Jaring SL Server naik ke: ${calon_sl_baru}")
+                        try:
+                            # Cancel SL lama
+                            if id_order_sl_server:
+                                exchange_trade.cancel_order(id_order_sl_server, SIMBOL)
+                            # Pasang SL Baru
+                            id_baru = pasang_sl_server(calon_sl_baru)
+                            if id_baru:
+                                id_order_sl_server = id_baru
+                                harga_sl_server_saat_ini = calon_sl_baru
+                        except Exception as e:
+                            print(f"⚠️ Gagal update SL di Binance: {e}")
+
+                profit_usd = (harga_skrg - harga_entry_sekarang) * lot_sekarang
+                tanda = "+" if profit_usd >= 0 else ""
+                
+                print(f"\n🛡️ HYBRID TRAILING AKTIF | Profit: {tanda}${profit_usd:.2f}")
+                print(f"   Live  : ${harga_skrg:.2f}  (Entry: ${harga_entry_sekarang:.2f})")
+                print(f"   Puncak: ${harga_tertinggi_posisi:.2f}  |  SL Server: ${harga_sl_server_saat_ini:.2f}")
+                time.sleep(3) 
             
+            # --- JIKA TIDAK ADA POSISI (MODE RADAR) ---
             if not sedang_ada_posisi:
                 bar_terakhir = df.iloc[-2] 
                 
-                # --- GATE 1 ---
                 skor_teknikal, rincian = hitung_skor_teknikal(bar_terakhir)
                 
-                # --- GATE 2 ---
                 data_untuk_ai = df.iloc[-2:][fitur_ai].head(1)
                 probabilitas = model_ai_global.predict_proba(data_untuk_ai)[0]
                 prob_naik = probabilitas[1] * 100
 
-                # --- HITUNG WIN RATE DARI CSV ---
                 total_trade, win_trade, win_rate = hitung_win_rate()
 
-                # --- TAMPILAN DASHBOARD RADAR ---
                 print(f"\n" + "="*65)
                 print(f"📡 RADAR 3-GATE PASAR ({TIMEFRAME}) | Live: ${harga_skrg:.2f}")
                 print(f"💰 Balance : ${current_usdt:.2f}")
@@ -265,34 +319,36 @@ while True:
                         print("⛔ BATAL BUY: Teknikal & ML mendukung, tapi BERITA SEDANG BURUK!")
                     else:
                         print(f"🔥 ULTIMATE CONFLUENCE! KETIGA GATE LULUS. Eksekusi BUY...")
-                        atr = bar_terakhir['ATR']
-                        sl = round(harga_skrg - (1.5 * atr), 2)
-                        tp = round(harga_skrg + (3.0 * atr), 2)
-                        
-                        jarak_sl = harga_skrg - sl
-                        if jarak_sl <= 0: jarak_sl = 10
-                        lot = round(BATAS_RISIKO_USD / jarak_sl, 3)
-                        if lot < 0.001: lot = 0.001
+                        lot = UKURAN_LOT
                         
                         if (lot * harga_skrg) > current_usdt:
                             print(f"⚠️ Saldo simulasi tidak cukup!")
                         else:
                             try:
                                 order_buy = exchange_trade.create_market_buy_order(SIMBOL, lot)
-                                harga_entry_sekarang = order_buy['average'] if order_buy.get('average') else harga_skrg
-                                lot_sekarang, tp_sekarang, sl_sekarang = lot, tp, sl
-                                sedang_ada_posisi = True
                                 
-                                clean_symbol = SIMBOL.replace('/', '')
-                                exchange_trade.private_post_order_oco({
-                                    'symbol': clean_symbol, 'side': 'SELL', 'quantity': exchange_trade.amount_to_precision(SIMBOL, lot),
-                                    'price': exchange_trade.price_to_precision(SIMBOL, tp), 'stopPrice': exchange_trade.price_to_precision(SIMBOL, sl),
-                                    'stopLimitPrice': exchange_trade.price_to_precision(SIMBOL, sl), 'stopLimitTimeInForce': 'GTC'
-                                })
-                                print(f"✅ OCO Berhasil Terpasang di Testnet Server!")
+                                # SETUP AWAL HYBRID TRAILING
+                                harga_entry_sekarang = order_buy['average'] if order_buy.get('average') else harga_skrg
+                                lot_sekarang = lot
+                                atr_posisi = bar_terakhir['ATR']
+                                
+                                # Stop Loss keras awal diatur 0.8x ATR ke bawah dari titik entry
+                                harga_sl_awal = round(harga_entry_sekarang - (0.8 * atr_posisi), 2)
+                                
+                                # Pasang SL ke Server
+                                id_sl = pasang_sl_server(harga_sl_awal)
+                                
+                                if id_sl:
+                                    id_order_sl_server = id_sl
+                                    harga_sl_server_saat_ini = harga_sl_awal
+                                    harga_tertinggi_posisi = harga_entry_sekarang
+                                    sedang_ada_posisi = True
+                                    print(f"✅ Beli Berhasil & SL Pengaman Server Aktif di ${harga_sl_awal}")
+                                else:
+                                    print("⚠️ Gagal pasang SL server, posisi ditutup otomatis demi keamanan.")
+                                    exchange_trade.create_market_sell_order(SIMBOL, lot)
                             except Exception as e:
                                 print(f"❌ Gagal Eksekusi: {e}")
-                                if sedang_ada_posisi: exchange_trade.create_market_sell_order(SIMBOL, lot); sedang_ada_posisi = False
                 else:
                     if skor_teknikal < AMBANG_BATAS_TEKNIKAL:
                         print("💤 Gate 1 Gagal. Menunggu formasi teknikal...")
