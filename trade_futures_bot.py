@@ -46,13 +46,14 @@ import logging
 import warnings
 import joblib
 import schedule
-import os
+import signal
+import atexit
+import sys
 import numpy as np
 import pandas as pd
 
 from datetime import datetime, timezone
 from pathlib import Path
-from dotenv import load_dotenv
 
 # ── Binance official SDK ──────────────────────────────────
 from binance.um_futures import UMFutures
@@ -94,18 +95,17 @@ log = logging.getLogger(__name__)
 # ╚══════════════════════════════════════════════════════════════════════╝
 
 class Config:
-    load_dotenv() 
 
     # ── Binance Futures ───────────────────────────────────────────────
-    BINANCE_API_KEY    = os.getenv('BINANCE_DEMO_API_KEY')
-    BINANCE_API_SECRET = os.getenv('BINANCE_DEMO_SECRET_KEY')
+    BINANCE_API_KEY    = "ISI_API_KEY_BINANCE_KAMU"
+    BINANCE_API_SECRET = "ISI_API_SECRET_BINANCE_KAMU"
     #   Testnet : "https://testnet.binancefuture.com"
     #   Live    : "https://fapi.binance.com"
     BINANCE_BASE_URL   = "https://testnet.binancefuture.com"
 
     # ── Supabase ──────────────────────────────────────────────────────
-    SUPABASE_URL       = os.getenv('SUPABASE_URL')   # URL project Supabase kamu
-    SUPABASE_KEY       = os.getenv('SUPABASE_KEY')    # Anon / service_role key
+    SUPABASE_URL       = "https://XXXX.supabase.co"   # URL project Supabase kamu
+    SUPABASE_KEY       = "ISI_ANON_KEY_SUPABASE"      # Anon / service_role key
     SUPABASE_TABLE     = "trades"
 
     # ── Symbol & Timeframe ────────────────────────────────────────────
@@ -1029,6 +1029,245 @@ class PositionMonitor:
 # ║                   10. TRADING BOT UTAMA                             ║
 # ╚══════════════════════════════════════════════════════════════════════╝
 
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║              10. GRACEFUL SHUTDOWN — Auto-Close Semua Posisi        ║
+# ╚══════════════════════════════════════════════════════════════════════╝
+
+class GracefulShutdown:
+    """
+    Tangkap sinyal shutdown dari OS dan tutup semua posisi terbuka
+    sebelum proses benar-benar berhenti.
+
+    Sinyal yang ditangkap:
+      SIGINT  → Ctrl+C di terminal
+      SIGTERM → kill <pid> / docker stop / systemd stop
+      SIGHUP  → terminal window ditutup paksa
+
+    Alur saat shutdown:
+      1. Set flag _shutting_down = True (cegah siklus baru berjalan)
+      2. Ambil semua posisi aktif di Binance
+      3. Kirim MARKET order sisi berlawanan (close) untuk tiap posisi
+      4. Ambil realized PnL dari income history
+      5. Update semua record OPEN di Supabase → WIN / LOSS
+      6. Tampilkan statistik akhir
+      7. Biarkan proses exit normal
+    """
+
+    def __init__(self, fetcher: "DataFetcher", db: "SupabaseManager"):
+        self.fetcher       = fetcher
+        self.db            = db
+        self._shutting_down = False
+
+        # Daftarkan handler untuk semua sinyal relevan
+        signal.signal(signal.SIGINT,  self._handle)
+        signal.signal(signal.SIGTERM, self._handle)
+        # SIGHUP hanya ada di Unix/Linux/macOS
+        if hasattr(signal, "SIGHUP"):
+            signal.signal(signal.SIGHUP, self._handle)
+
+        # Fallback: atexit dipanggil bahkan kalau proses exit lewat sys.exit()
+        atexit.register(self._atexit_handler)
+
+        log.info("🛡️  GracefulShutdown terdaftar (SIGINT / SIGTERM / SIGHUP / atexit)")
+
+    # ── Handler sinyal OS ─────────────────────────────────────────────
+    def _handle(self, signum: int, frame):
+        sig_name = signal.Signals(signum).name
+        log.warning(f"\n⚠️  Sinyal {sig_name} diterima — memulai graceful shutdown...")
+        self._shutdown()
+        sys.exit(0)
+
+    # ── Fallback atexit (dipanggil saat sys.exit atau unhandled exception) ─
+    def _atexit_handler(self):
+        if not self._shutting_down:
+            log.warning("⚠️  Proses keluar tanpa sinyal — menjalankan emergency close...")
+            self._shutdown()
+
+    # ── Proses utama shutdown ─────────────────────────────────────────
+    def _shutdown(self):
+        """
+        Routine lengkap penutupan posisi.
+        Flag _shutting_down mencegah double-call kalau sinyal masuk dua kali.
+        """
+        if self._shutting_down:
+            return
+        self._shutting_down = True
+
+        log.info("=" * 60)
+        log.info("🔴 GRACEFUL SHUTDOWN — Menutup semua posisi terbuka...")
+        log.info("=" * 60)
+
+        try:
+            closed = self._close_all_positions()
+            self._sync_supabase_on_exit(closed)
+            self.db.get_stats()
+            log.info("✅ Semua posisi berhasil ditutup. Bot berhenti dengan aman.")
+        except Exception as e:
+            log.error(f"❌ Error saat shutdown: {e}", exc_info=True)
+
+    # ── Tutup semua posisi di Binance ─────────────────────────────────
+    def _close_all_positions(self) -> list[dict]:
+        """
+        Ambil semua posisi aktif dari Binance, lalu kirim MARKET order
+        di sisi berlawanan untuk menutup tiap posisi.
+
+        Return: list detail posisi yang berhasil ditutup.
+        """
+        try:
+            positions = self.fetcher.fetch_open_positions(Config.SYMBOL)
+        except Exception as e:
+            log.error(f"❌ Gagal ambil posisi dari Binance: {e}")
+            return []
+
+        if not positions:
+            log.info("ℹ️  Tidak ada posisi terbuka — tidak ada yang perlu ditutup.")
+            return []
+
+        log.info(f"📋 Ditemukan {len(positions)} posisi terbuka. Memulai penutupan...")
+        closed = []
+
+        for pos in positions:
+            symbol    = pos.get("symbol", Config.SYMBOL)
+            amt       = float(pos.get("positionAmt", 0))
+            entry_px  = float(pos.get("entryPrice", 0))
+
+            if amt == 0:
+                continue
+
+            # positionAmt positif = LONG → tutup dengan SELL
+            # positionAmt negatif = SHORT → tutup dengan BUY
+            close_side = "SELL" if amt > 0 else "BUY"
+            close_qty  = abs(amt)
+            side_label = "LONG" if amt > 0 else "SHORT"
+
+            try:
+                # Batalkan semua order terbuka dulu (SL/TP) supaya tidak konflik
+                self._cancel_open_orders(symbol)
+
+                # Kirim market close order
+                order = self.fetcher.client.new_order(
+                    symbol    = symbol,
+                    side      = close_side,
+                    type      = "MARKET",
+                    quantity  = close_qty,
+                    params    = {"reduceOnly": "true"},
+                )
+
+                log.info(
+                    f"  ✅ Close {side_label:5s} {symbol} | "
+                    f"qty={close_qty} | entry≈{entry_px:.2f} | "
+                    f"orderID={order.get('orderId', '?')}"
+                )
+
+                closed.append({
+                    "symbol"    : symbol,
+                    "side"      : side_label,
+                    "qty"       : close_qty,
+                    "entry_px"  : entry_px,
+                    "order_id"  : str(order.get("orderId", "")),
+                })
+
+                # Beri jeda kecil antar order supaya tidak kena rate limit
+                time.sleep(0.3)
+
+            except ClientError as e:
+                log.error(f"  ❌ Gagal close {side_label} {symbol}: {e}")
+
+        return closed
+
+    # ── Batalkan order SL/TP yang masih pending ───────────────────────
+    def _cancel_open_orders(self, symbol: str):
+        """
+        Batalkan semua open order (SL, TP, limit) untuk symbol ini.
+        Wajib dilakukan sebelum close position supaya tidak double-close.
+        """
+        try:
+            self.fetcher.client.cancel_open_orders(symbol=symbol)
+            log.info(f"  🗑️  Semua pending order {symbol} dibatalkan")
+        except ClientError as e:
+            # Kalau tidak ada order, Binance return error kode -2011 — aman diabaikan
+            if "-2011" not in str(e):
+                log.warning(f"  ⚠️  Gagal cancel orders {symbol}: {e}")
+
+    # ── Sinkron status penutupan ke Supabase ──────────────────────────
+    def _sync_supabase_on_exit(self, closed_positions: list[dict]):
+        """
+        Setelah semua posisi ditutup di Binance, update record OPEN
+        yang ada di Supabase menjadi WIN atau LOSS.
+
+        Ambil realized PnL dari income history Binance untuk akurasi.
+        """
+        open_trades = self.db.get_open_trades()
+        if not open_trades:
+            return
+
+        log.info(f"📝 Sinkronisasi {len(open_trades)} record OPEN ke Supabase...")
+
+        # Ambil income history sekali untuk semua — lebih efisien
+        pnl_map = self._fetch_recent_pnl_map()
+
+        for trade in open_trades:
+            trade_id    = trade["id"]
+            order_id    = str(trade.get("order_id", ""))
+            entry_price = float(trade["entry_price"])
+            size        = float(trade.get("size", 0))
+            side        = trade.get("side", "LONG")
+
+            # Cari PnL berdasarkan order_id kalau ada di map
+            pnl = pnl_map.get(order_id, None)
+
+            if pnl is None:
+                # Fallback: cari dari posisi yang baru ditutup
+                matched = next(
+                    (p for p in closed_positions if p["order_id"] == order_id), None
+                )
+                # Kalau tidak ketemu juga, anggap break-even (PnL=0)
+                pnl = 0.0
+                if matched:
+                    log.debug(f"  Posisi {order_id[:8]} ditemukan di closed_positions")
+
+            pnl_pct  = pnl / (entry_price * size) if (entry_price * size) > 0 else 0.0
+            exit_px  = self._estimate_exit(entry_price, pnl, size, side)
+            status   = "WIN" if pnl > 0 else "LOSS"
+
+            self.db.close_trade(trade_id, exit_px, pnl, pnl_pct, status)
+
+    def _fetch_recent_pnl_map(self) -> dict[str, float]:
+        """
+        Ambil income history Binance dan buat mapping order_id → PnL.
+        Dipakai untuk mencocokkan trade Supabase dengan realized PnL aktual.
+        """
+        pnl_map = {}
+        try:
+            income_list = self.fetcher.client.get_income_history(
+                symbol     = Config.SYMBOL,
+                incomeType = "REALIZED_PNL",
+                limit      = 50,   # Ambil 50 entry terbaru
+            )
+            for entry in income_list:
+                oid = str(entry.get("tradeId", entry.get("orderId", "")))
+                pnl = float(entry.get("income", 0))
+                pnl_map[oid] = pnl
+        except ClientError as e:
+            log.warning(f"⚠️  Gagal ambil income history: {e}")
+        return pnl_map
+
+    @staticmethod
+    def _estimate_exit(entry: float, pnl: float, size: float, side: str) -> float:
+        """Estimasi exit price dari realized PnL."""
+        if size <= 0 or entry <= 0:
+            return entry
+        return round(
+            entry + pnl / size if side == "LONG" else entry - pnl / size,
+            4
+        )
+
+    @property
+    def is_shutting_down(self) -> bool:
+        """Cek dari luar apakah proses sedang dalam mode shutdown."""
+        return self._shutting_down
+
+
 class TradingBot:
     """
     Orkestrator utama yang nyatuin semua komponen:
@@ -1049,13 +1288,15 @@ class TradingBot:
     """
 
     def __init__(self):
-        self.client  = create_binance_client()
-        self.db      = SupabaseManager()
-        self.fetcher = DataFetcher(self.client)
-        self.ml      = MLModel()
-        self.orders  = OrderManager(self.fetcher, self.db)
-        self.monitor = PositionMonitor(self.fetcher, self.db)
-        self._cycle  = 0
+        self.client   = create_binance_client()
+        self.db       = SupabaseManager()
+        self.fetcher  = DataFetcher(self.client)
+        self.ml       = MLModel()
+        self.orders   = OrderManager(self.fetcher, self.db)
+        self.monitor  = PositionMonitor(self.fetcher, self.db)
+        self._cycle   = 0
+        # Daftarkan handler shutdown — harus setelah fetcher & db siap
+        self.shutdown = GracefulShutdown(self.fetcher, self.db)
 
     def initialize(self):
         """
@@ -1081,7 +1322,13 @@ class TradingBot:
         """
         Satu siklus lengkap setiap 15 menit:
           sync → fetch → feature → predict → signal → order
+
+        Siklus dibatalkan kalau bot sedang dalam proses shutdown.
         """
+        # Jangan jalankan siklus baru kalau sedang shutdown
+        if self.shutdown.is_shutting_down:
+            return
+
         self._cycle += 1
         log.info(f"{'─'*60}")
         log.info(f"🔁 Siklus #{self._cycle} — {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}")

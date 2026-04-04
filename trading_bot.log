@@ -27,3 +27,8 @@ weighted avg       0.52      0.52      0.52     26219
 2026-04-04 09:21:57,776 | INFO | 📊 Signal=HOLD  | VWAP=↓ | RSI=43.5 | MACD_h=-10.06779 | ML=0(57%) | ATR=48.03
 2026-04-04 09:21:57,778 | INFO | 💤 HOLD — tidak ada kondisi entry terpenuhi
 2026-04-04 09:21:57,779 | INFO | ⏰ Scheduler aktif — eksekusi tiap 15 menit
+2026-04-04 09:36:57,822 | INFO | ────────────────────────────────────────────────────────────
+2026-04-04 09:36:57,823 | INFO | 🔁 Siklus #2 — 2026-04-04 02:36 UTC
+2026-04-04 09:36:58,541 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 09:36:59,818 | INFO | 📊 Signal=HOLD  | VWAP=↓ | RSI=43.4 | MACD_h=-10.06766 | ML=0(55%) | ATR=45.67
+2026-04-04 09:36:59,818 | INFO | 💤 HOLD — tidak ada kondisi entry terpenuhi
