@@ -32,3 +32,51 @@ weighted avg       0.52      0.52      0.52     26219
 2026-04-04 09:36:58,541 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
 2026-04-04 09:36:59,818 | INFO | 📊 Signal=HOLD  | VWAP=↓ | RSI=43.4 | MACD_h=-10.06766 | ML=0(55%) | ATR=45.67
 2026-04-04 09:36:59,818 | INFO | 💤 HOLD — tidak ada kondisi entry terpenuhi
+2026-04-04 09:53:31,550 | INFO | ✅ Binance Futures (TESTNET ⚠️) — terhubung
+2026-04-04 09:53:31,833 | INFO | ✅ Supabase — terhubung
+2026-04-04 09:53:31,834 | INFO | 🛡️  GracefulShutdown terdaftar (SIGINT / SIGTERM / SIGHUP / atexit)
+2026-04-04 09:53:31,834 | INFO | 🚀 TradingBot dimulai!
+2026-04-04 09:53:31,883 | INFO | 📂 Model di-load dari model_trading.pkl
+2026-04-04 09:53:31,884 | INFO | ✅ Model ML siap.
+2026-04-04 09:53:32,086 | ERROR | ❌ Gagal hitung stats: [Errno 11001] getaddrinfo failed
+2026-04-04 09:53:32,087 | INFO | ────────────────────────────────────────────────────────────
+2026-04-04 09:53:32,087 | INFO | 🔁 Siklus #1 — 2026-04-04 02:53 UTC
+2026-04-04 09:53:32,089 | ERROR | ❌ Gagal ambil open trades: [Errno 11001] getaddrinfo failed
+2026-04-04 09:53:32,764 | INFO | 📊 Signal=HOLD  | VWAP=↓ | RSI=43.4 | MACD_h=-9.30927 | ML=0(57%) | ATR=43.03
+2026-04-04 09:53:32,765 | INFO | 💤 HOLD — tidak ada kondisi entry terpenuhi
+2026-04-04 09:53:32,765 | INFO | ⏰ Scheduler aktif — eksekusi tiap 15 menit
+2026-04-04 09:54:00,323 | WARNING | 
+⚠️  Sinyal SIGINT diterima — memulai graceful shutdown...
+2026-04-04 09:54:00,324 | INFO | ============================================================
+2026-04-04 09:54:00,324 | INFO | 🔴 GRACEFUL SHUTDOWN — Menutup semua posisi terbuka...
+2026-04-04 09:54:00,325 | INFO | ============================================================
+2026-04-04 09:54:00,443 | INFO | ℹ️  Tidak ada posisi terbuka — tidak ada yang perlu ditutup.
+2026-04-04 09:54:00,481 | ERROR | ❌ Gagal ambil open trades: [Errno 11001] getaddrinfo failed
+2026-04-04 09:54:00,484 | ERROR | ❌ Gagal hitung stats: [Errno 11001] getaddrinfo failed
+2026-04-04 09:54:00,484 | INFO | ✅ Semua posisi berhasil ditutup. Bot berhenti dengan aman.
+2026-04-04 09:58:42,540 | INFO | ✅ Binance Futures (TESTNET ⚠️) — terhubung
+2026-04-04 09:59:02,418 | INFO | ✅ Binance Futures (TESTNET ⚠️) — terhubung
+2026-04-04 10:00:23,832 | INFO | ✅ Binance Futures (TESTNET ⚠️) — terhubung
+2026-04-04 10:00:24,076 | INFO | ✅ Supabase — terhubung
+2026-04-04 10:00:24,076 | INFO | 🛡️  GracefulShutdown terdaftar (SIGINT / SIGTERM / SIGHUP / atexit)
+2026-04-04 10:00:24,077 | INFO | 🚀 TradingBot dimulai!
+2026-04-04 10:00:24,126 | INFO | 📂 Model di-load dari model_trading.pkl
+2026-04-04 10:00:24,127 | INFO | ✅ Model ML siap.
+2026-04-04 10:00:25,077 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 10:00:25,154 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 10:00:25,155 | INFO | ────────────────────────────────────────────────────────────
+2026-04-04 10:00:25,156 | INFO | 🔁 Siklus #1 — 2026-04-04 03:00 UTC
+2026-04-04 10:00:25,294 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 10:00:26,123 | INFO | 📊 Signal=HOLD  | VWAP=↓ | RSI=43.9 | MACD_h=-8.05670 | ML=0(57%) | ATR=40.35
+2026-04-04 10:00:26,124 | INFO | 💤 HOLD — tidak ada kondisi entry terpenuhi
+2026-04-04 10:00:26,124 | INFO | ⏰ Scheduler aktif — eksekusi tiap 15 menit
+2026-04-04 10:00:38,919 | WARNING | 
+⚠️  Sinyal SIGINT diterima — memulai graceful shutdown...
+2026-04-04 10:00:38,919 | INFO | ============================================================
+2026-04-04 10:00:38,919 | INFO | 🔴 GRACEFUL SHUTDOWN — Menutup semua posisi terbuka...
+2026-04-04 10:00:38,920 | INFO | ============================================================
+2026-04-04 10:00:39,030 | INFO | ℹ️  Tidak ada posisi terbuka — tidak ada yang perlu ditutup.
+2026-04-04 10:00:39,304 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 10:00:39,438 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 10:00:39,519 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 10:00:39,520 | INFO | ✅ Semua posisi berhasil ditutup. Bot berhenti dengan aman.

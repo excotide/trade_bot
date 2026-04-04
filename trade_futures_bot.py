@@ -49,11 +49,13 @@ import schedule
 import signal
 import atexit
 import sys
+import os
 import numpy as np
 import pandas as pd
 
 from datetime import datetime, timezone
 from pathlib import Path
+from dotenv import load_dotenv
 
 # ── Binance official SDK ──────────────────────────────────
 from binance.um_futures import UMFutures
@@ -96,16 +98,17 @@ log = logging.getLogger(__name__)
 
 class Config:
 
+    load_dotenv()
     # ── Binance Futures ───────────────────────────────────────────────
-    BINANCE_API_KEY    = "ISI_API_KEY_BINANCE_KAMU"
-    BINANCE_API_SECRET = "ISI_API_SECRET_BINANCE_KAMU"
+    BINANCE_API_KEY    = os.getenv('BINANCE_DEMO_API_KEY')
+    BINANCE_API_SECRET = os.getenv('BINANCE_DEMO_SECRET_KEY')
     #   Testnet : "https://testnet.binancefuture.com"
     #   Live    : "https://fapi.binance.com"
     BINANCE_BASE_URL   = "https://testnet.binancefuture.com"
 
     # ── Supabase ──────────────────────────────────────────────────────
-    SUPABASE_URL       = "https://XXXX.supabase.co"   # URL project Supabase kamu
-    SUPABASE_KEY       = "ISI_ANON_KEY_SUPABASE"      # Anon / service_role key
+    SUPABASE_URL       = os.getenv('SUPABASE_URL')   # URL project Supabase kamu
+    SUPABASE_KEY       = os.getenv('SUPABASE_KEY')      # Anon / service_role key
     SUPABASE_TABLE     = "trades"
 
     # ── Symbol & Timeframe ────────────────────────────────────────────
