@@ -1,1024 +1,1144 @@
-import os
+"""
+╔══════════════════════════════════════════════════════════════════════╗
+║              ALGO TRADING BOT — ML + TECHNICAL ANALYSIS             ║
+║  Timeframe  : 15m / 1H / 4H                                         ║
+║  Indikator  : VWAP · RSI · MACD · ATR                               ║
+║  Model ML   : Random Forest + Gradient Boosting                      ║
+║  Exchange   : Binance Futures (binance-futures-connector)            ║
+║  Database   : Supabase (history transaksi + winrate otomatis)        ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+Cara pakai:
+    1. pip install binance-futures-connector supabase pandas-ta scikit-learn joblib schedule
+    2. Isi semua kredensial di bagian Config
+    3. Buat tabel di Supabase (lihat SQL di bawah ini)
+    4. Jalankan: python trading_bot.py
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ SQL SCHEMA — jalankan di Supabase > SQL Editor
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    CREATE TABLE trades (
+        id            UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+        created_at    TIMESTAMPTZ DEFAULT now(),
+        symbol        TEXT        NOT NULL,
+        side          TEXT        NOT NULL,   -- 'LONG' | 'SHORT'
+        entry_price   FLOAT       NOT NULL,
+        exit_price    FLOAT,                  -- NULL selama masih OPEN
+        sl_price      FLOAT,
+        tp_price      FLOAT,
+        size          FLOAT,
+        pnl           FLOAT,                  -- NULL selama masih OPEN
+        pnl_pct       FLOAT,                  -- PnL dalam desimal (0.05 = 5%)
+        status        TEXT        NOT NULL,   -- 'OPEN' | 'WIN' | 'LOSS'
+        ml_confidence FLOAT,
+        atr           FLOAT,
+        order_id      TEXT,
+        signal_ts     TIMESTAMPTZ
+    );
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+
+# ─────────────────────────────────────────────────────────
+# IMPORTS
+# ─────────────────────────────────────────────────────────
 import time
-import requests
+import logging
+import warnings
+import joblib
+import schedule
+import os
+import numpy as np
 import pandas as pd
-import pandas_ta as ta
-import signal
-import sys
+
+from datetime import datetime, timezone
+from pathlib import Path
 from dotenv import load_dotenv
-from datetime import datetime
-from sklearn.ensemble import RandomForestClassifier
-from supabase import create_client, Client
-import urllib3
 
-urllib3.disable_warnings()
-
-os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
-os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
-
-# ==========================================
-# 1. IMPORT BINANCE FUTURES CONNECTOR
-# ==========================================
-# pip install binance-futures-connector supabase
+# ── Binance official SDK ──────────────────────────────────
 from binance.um_futures import UMFutures
 from binance.error import ClientError
 
-load_dotenv()
+# ── Supabase ──────────────────────────────────────────────
+from supabase import create_client, Client as SupabaseClient
 
-TESTNET_URL    = "https://testnet.binancefuture.com"
-API_KEY        = os.getenv('BINANCE_DEMO_API_KEY')
-API_SECRET     = os.getenv('BINANCE_DEMO_SECRET_KEY')
-SUPABASE_URL   = os.getenv('SUPABASE_URL')
-SUPABASE_KEY   = os.getenv('SUPABASE_KEY')
+# ── Technical Analysis ────────────────────────────────────
+from ta.momentum  import RSIIndicator
+from ta.trend     import MACD
+from ta.volatility import AverageTrueRange
 
-# Supabase client — data history tersimpan permanen di cloud
-# Tidak akan hilang saat Railway redeploy / restart
-try:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    print("✅ Supabase terhubung!")
-except Exception as e:
-    print(f"❌ Gagal koneksi Supabase: {e}")
-    print("   Pastikan SUPABASE_URL dan SUPABASE_KEY sudah diisi di .env")
-    sys.exit(1)
+# ── Machine Learning ──────────────────────────────────────
+from sklearn.ensemble     import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.model_selection import TimeSeriesSplit, cross_val_score
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline     import Pipeline
+from sklearn.metrics      import classification_report
 
-client_data  = UMFutures(base_url=TESTNET_URL)
-client_trade = UMFutures(key=API_KEY, secret=API_SECRET, base_url=TESTNET_URL)
+warnings.filterwarnings("ignore")
 
-# ==========================================
-# 2. PARAMETER STRATEGI
-# ==========================================
-SIMBOL         = 'BTCUSDT'
-SIMBOL_DISPLAY = 'BTC/USDT'
-TIMEFRAME      = '5m'     # ← kembali ke 5 menit
-LEVERAGE       = 10
-MARGIN_USDT    = 10.0
+# ─────────────────────────────────────────────────────────
+# LOGGING
+# ─────────────────────────────────────────────────────────
+logging.basicConfig(
+    level   = logging.INFO,
+    format  = "%(asctime)s | %(levelname)s | %(message)s",
+    handlers = [
+        logging.StreamHandler(),
+        logging.FileHandler("trading_bot.log", encoding="utf-8"),
+    ],
+)
+log = logging.getLogger(__name__)
 
-# --- PARAMETER GATE DILONGGARKAN AGAR TIDAK TIDUR TERUS ---
-AMBANG_TEKNIKAL = 50      # was 65
-AMBANG_AI       = 53.0    # was 60.0
 
-# SL & Trailing dikembalikan ke nilai 5m
-TRAILING_ATR_MULTIPLIER = 0.5   # was 0.3 di 1m
-SL_AWAL_ATR_MULTIPLIER  = 0.8   # was 0.5 di 1m
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║                         1. KONFIGURASI                              ║
+# ╚══════════════════════════════════════════════════════════════════════╝
 
-# RSI konsistensi — dipercepat
-RSI_KONSISTENSI_CANDLE = 2      # was 3
+class Config:
+    load_dotenv() 
 
-# EMA setting — di 5m pakai EMA lebih panjang
-EMA_PENDEK  = 50    # was 20 di 1m
-EMA_PANJANG = 200   # was 89 di 1m
+    # ── Binance Futures ───────────────────────────────────────────────
+    BINANCE_API_KEY    = os.getenv('BINANCE_DEMO_API_KEY')
+    BINANCE_API_SECRET = os.getenv('BINANCE_DEMO_SECRET_KEY')
+    #   Testnet : "https://testnet.binancefuture.com"
+    #   Live    : "https://fapi.binance.com"
+    BINANCE_BASE_URL   = "https://testnet.binancefuture.com"
 
-# MACD setting — kembali ke default yang cocok untuk 5m
-MACD_FAST   = 12    # was 5 di 1m
-MACD_SLOW   = 26    # was 13 di 1m
-MACD_SIGNAL = 9     # was 4 di 1m
+    # ── Supabase ──────────────────────────────────────────────────────
+    SUPABASE_URL       = os.getenv('SUPABASE_URL')   # URL project Supabase kamu
+    SUPABASE_KEY       = os.getenv('SUPABASE_KEY')    # Anon / service_role key
+    SUPABASE_TABLE     = "trades"
 
-# Stochastic setting — kembali ke standard
-STOCH_K = 14        # was 5 di 1m
-STOCH_D = 3
-STOCH_S = 3
+    # ── Symbol & Timeframe ────────────────────────────────────────────
+    SYMBOL             = "BTCUSDT"      # Format Binance (tanpa slash)
+    TF_SIGNAL          = "15m"          # Sinyal entry utama
+    TF_TREND           = "1h"           # Konfirmasi bias tren
+    TF_ML              = "1h"           # Timeframe training ML (1H-4H optimal)
 
-# Loop delay — di 5m cukup 10 detik
-LOOP_DELAY = 10     # was 2 di 1m
+    # ── Manajemen Risiko ──────────────────────────────────────────────
+    RISK_PER_TRADE     = 0.01           # Max 1% modal per trade
+    ATR_SL_MULT        = 1.5           # SL = 1.5× ATR
+    ATR_TP_MULT        = 2.5           # TP = 2.5× ATR  (R:R = 1:1.67)
+    MAX_LEVERAGE       = 5
+    MAX_OPEN_TRADES    = 3
 
-# ── Threshold Gate 3 (Sentimen Realtime) ─────────────────────────────────────
-# Fear & Greed: 0-100 (0=Extreme Fear, 100=Extreme Greed)
-FNG_GREED_THRESHOLD = 65   # > ini = pasar terlalu greedy → SHORT lebih aman
-FNG_FEAR_THRESHOLD  = 35   # < ini = pasar terlalu takut → LONG lebih aman
+    # ── ML Model ──────────────────────────────────────────────────────
+    MODEL_PATH         = Path("model_trading.pkl")
+    MIN_TRAIN_ROWS     = 10_000         # Minimum wajib sesuai literatur kuantitatif
+    TRAIN_YEARS        = 3              # Ambil 3 tahun data historis
 
-# Funding Rate: positif = longs bayar shorts (bullish berlebihan)
-FUNDING_BULLISH_THRESHOLD = 0.0005   # > ini = pasar overbullish → SHORT lebih aman
-FUNDING_BEARISH_THRESHOLD = -0.0005  # < ini = pasar overbearish → LONG lebih aman
+    # ── Threshold Sinyal ──────────────────────────────────────────────
+    RSI_OVERSOLD       = 35
+    RSI_OVERBOUGHT     = 65
+    ML_CONFIDENCE      = 0.60           # ML harus ≥60% yakin sebelum entry
+    VWAP_BAND_PCT      = 0.001          # 0.1% buffer zona netral VWAP
 
-# Long/Short Ratio: > 1 artinya lebih banyak LONG, < 1 lebih banyak SHORT
-LS_RATIO_LONG_HEAVY  = 1.5   # > ini = terlalu banyak long → SHORT lebih aman
-LS_RATIO_SHORT_HEAVY = 0.7   # < ini = terlalu banyak short → LONG lebih aman
 
-# ── Cache sentimen (biar tidak di-fetch setiap 10 detik) ─────────────────────
-_cache_sentimen = {
-    'data'        : None,
-    'last_fetch'  : 0,
-    'ttl_detik'   : 60    # refresh setiap 60 detik
-}
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║              2. BINANCE FUTURES CLIENT                               ║
+# ╚══════════════════════════════════════════════════════════════════════╝
 
-# --- STATE ---
-sedang_ada_posisi        = False
-arah_posisi              = None
-harga_entry_sekarang     = 0
-lot_sekarang             = 0
-id_order_sl_server       = None
-harga_sl_server_saat_ini = 0
-harga_ekstrem_posisi     = 0
-atr_posisi               = 0
-model_ai_global          = None
-
-fitur_ai = ['RSI', 'MACD_Line', 'MACD_Hist', 'Jarak_ke_EMA', 'volume', 'OBV', 'STOCH_K']
-
-# ==========================================
-# HELPER
-# ==========================================
-def parse_resp(resp):
-    if isinstance(resp, dict):
-        return resp
-    try:
-        return resp.json()
-    except Exception:
-        return {}
-
-def ohlcv_ke_dataframe(klines):
-    df = pd.DataFrame(klines, columns=[
-        'timestamp', 'open', 'high', 'low', 'close', 'volume',
-        'close_time', 'quote_volume', 'trades',
-        'taker_buy_base', 'taker_buy_quote', 'ignore'
-    ])
-    for col in ['open', 'high', 'low', 'close', 'volume']:
-        df[col] = df[col].astype(float)
-    return df
-
-# ==========================================
-# SETUP LEVERAGE + CEK KONEKSI
-# ==========================================
-def setup_leverage():
-    print("🔌 Menghubungkan ke Binance Futures Testnet...")
-    if not API_KEY or not API_SECRET:
-        print("\n❌ API KEY tidak ditemukan di .env!")
-        print("   BINANCE_DEMO_API_KEY=napikeykamu")
-        print("   BINANCE_DEMO_SECRET_KEY=nsecretkamu")
-        print("   → https://testnet.binancefuture.com (login GitHub)")
-        sys.exit(1)
-
-    print(f"   [DEBUG] Key: {API_KEY[:6]}...{API_KEY[-4:]}")
-    try:
-        resp = client_trade.account()
-        data = parse_resp(resp)
-        usdt = 0.0
-        for asset in data.get('assets', []):
-            if asset.get('asset') == 'USDT':
-                usdt = float(asset.get('walletBalance', 0))
-                break
-        print(f"✅ Koneksi berhasil! Saldo USDT: ${usdt:.2f}")
-    except ClientError as e:
-        print(f"\n❌ AUTENTIKASI GAGAL: {e}")
-        print("   → Key harus dari https://testnet.binancefuture.com (login GitHub)")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n❌ Gagal koneksi: {e}")
-        sys.exit(1)
-
-    try:
-        client_trade.change_leverage(symbol=SIMBOL, leverage=LEVERAGE)
-        print(f"✅ Leverage: {LEVERAGE}x")
-    except Exception as e:
-        print(f"⚠️ Set leverage: {e} (lanjut...)")
-
-# ==========================================
-# HITUNG LOT & SL
-# ==========================================
-def hitung_lot(harga):
-    return round((MARGIN_USDT * LEVERAGE) / harga, 3)
-
-def pasang_sl_server(harga_sl, arah):
-    try:
-        resp = client_trade.new_order(
-            symbol=SIMBOL,
-            side='SELL' if arah == 'LONG' else 'BUY',
-            type='STOP_MARKET',
-            quantity=lot_sekarang,
-            stopPrice=harga_sl,
-            positionSide='LONG' if arah == 'LONG' else 'SHORT',
-            timeInForce='GTC',
-            reduceOnly='true'
-        )
-        return parse_resp(resp).get('orderId')
-    except Exception as e:
-        print(f"❌ Gagal pasang SL: {e}")
-        return None
-
-# ==========================================
-# 3. LOG & PROTEKSI — pakai Supabase
-# ==========================================
-def simpan_ke_db(data_trade):
+def create_binance_client() -> UMFutures:
     """
-    Simpan record trade ke Supabase (PostgreSQL).
-    Data permanen — tidak hilang saat Railway redeploy/restart.
+    Inisialisasi koneksi ke Binance UM-Futures (USDT-Margined).
+    Testnet dan live dibedain dari base_url di Config.
     """
-    try:
-        supabase.table('history_transaksi').insert({
-            'waktu'      : data_trade['Waktu'],
-            'simbol'     : data_trade['Simbol'],
-            'side'       : data_trade['Side'],
-            'entry'      : data_trade['Entry'],
-            'exit'       : data_trade['Exit'],
-            'lot'        : data_trade['Lot'],
-            'leverage'   : data_trade['Leverage'],
-            'margin_usdt': data_trade['Margin_USDT'],
-            'pnl_usd'    : data_trade['PnL_USD'],
-            'pnl_persen' : data_trade['PnL_Persen'],
-            'status'     : data_trade['Status'],
-        }).execute()
-    except Exception as e:
-        # Kalau Supabase gagal, fallback ke CSV lokal sebagai backup
-        print(f"⚠️ Gagal simpan ke Supabase: {e} — backup ke CSV lokal")
-        try:
-            import csv
-            file_name   = 'history_backup.csv'
-            file_exists = os.path.isfile(file_name)
-            with open(file_name, mode='a', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=list(data_trade.keys()))
-                if not file_exists:
-                    writer.writeheader()
-                writer.writerow(data_trade)
-        except Exception as e2:
-            print(f"❌ Backup CSV juga gagal: {e2}")
-
-def hitung_win_rate():
-    """
-    Hitung win rate dari data di Supabase.
-    """
-    try:
-        resp  = supabase.table('history_transaksi').select('pnl_usd').execute()
-        data  = resp.data
-        if not data:
-            return 0, 0, 0.0
-        total = len(data)
-        win   = sum(1 for row in data if float(row['pnl_usd']) > 0)
-        return total, win, (win / total) * 100
-    except Exception as e:
-        print(f"⚠️ Gagal ambil win rate dari Supabase: {e}")
-        return 0, 0, 0.0
-
-def hitung_pnl(harga_exit, harga_entry, lot, arah):
-    return (harga_exit - harga_entry) * lot if arah == 'LONG' else (harga_entry - harga_exit) * lot
-
-def tutup_posisi_darurat(harga_akhir, status='FORCE_CLOSE'):
-    global sedang_ada_posisi, id_order_sl_server, arah_posisi
-    try:
-        client_trade.cancel_open_orders(symbol=SIMBOL)
-        client_trade.new_order(
-            symbol=SIMBOL,
-            side='SELL' if arah_posisi == 'LONG' else 'BUY',
-            type='MARKET', quantity=lot_sekarang,
-            positionSide='LONG' if arah_posisi == 'LONG' else 'SHORT',
-            reduceOnly='true'
-        )
-        pnl = hitung_pnl(harga_akhir, harga_entry_sekarang, lot_sekarang, arah_posisi)
-        pct = (pnl / MARGIN_USDT) * 100
-        simpan_ke_db({
-            'Waktu'      : datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'Simbol'     : SIMBOL_DISPLAY,
-            'Side'       : arah_posisi,
-            'Entry'      : harga_entry_sekarang,
-            'Exit'       : harga_akhir,
-            'Lot'        : lot_sekarang,
-            'Leverage'   : LEVERAGE,
-            'Margin_USDT': MARGIN_USDT,
-            'PnL_USD'    : round(pnl, 2),
-            'PnL_Persen' : round(pct, 2),
-            'Status'     : status
-        })
-        print(f"💰 Posisi Ditutup. PnL: ${pnl:.2f} ({pct:+.1f}%)")
-        sedang_ada_posisi = False; id_order_sl_server = None; arah_posisi = None
-    except Exception as e:
-        print(f"❌ Gagal tutup paksa: {e}")
-
-def tangani_keluar(sig, frame):
-    print("\n\n🛑 BERHENTI...")
-    if sedang_ada_posisi:
-        try:
-            harga_akhir = float(parse_resp(client_data.ticker_price(symbol=SIMBOL)).get('price', harga_entry_sekarang))
-        except Exception:
-            harga_akhir = harga_entry_sekarang
-        tutup_posisi_darurat(harga_akhir)
-    sys.exit(0)
-
-signal.signal(signal.SIGINT, tangani_keluar)
-
-# ==========================================
-# 4. AI PREDIKSI (OTAK KIRI)
-# ==========================================
-def latih_ai_diawal():
-    print(f"⏳ Melatih AI... Mengambil 1000 data historis ({TIMEFRAME})...")
-    klines = client_data.klines(symbol=SIMBOL, interval=TIMEFRAME, limit=1000)
-    df     = ohlcv_ke_dataframe(klines)
-
-    # Gunakan setting yang sudah disesuaikan untuk 1m
-    df['RSI']          = ta.rsi(df['close'], length=14)
-    macd               = ta.macd(df['close'], fast=MACD_FAST, slow=MACD_SLOW, signal=MACD_SIGNAL)
-    macd_col           = f'MACD_{MACD_FAST}_{MACD_SLOW}_{MACD_SIGNAL}'
-    macd_hist_col      = f'MACDh_{MACD_FAST}_{MACD_SLOW}_{MACD_SIGNAL}'
-    df['MACD_Line']    = macd[macd_col]
-    df['MACD_Hist']    = macd[macd_hist_col]
-    df['EMA_200']      = ta.ema(df['close'], length=EMA_PANJANG)
-    df['Jarak_ke_EMA'] = df['close'] - df['EMA_200']
-    df['OBV']          = ta.obv(df['close'], df['volume'])
-    stoch_key          = f'STOCHk_{STOCH_K}_{STOCH_D}_{STOCH_S}'
-    stoch              = ta.stoch(df['high'], df['low'], df['close'], k=STOCH_K, d=STOCH_D, smooth_k=STOCH_S)
-    df['STOCH_K']      = stoch[stoch_key] if stoch is not None and stoch_key in stoch.columns else 50
-    df['Target_Naik']  = (df['close'].shift(-1) > df['close']).astype(int)
-    df.dropna(inplace=True)
-
-    model = RandomForestClassifier(n_estimators=150, random_state=42)
-    model.fit(df[fitur_ai], df['Target_Naik'])
-    print("✅ AI Siap!")
-    return model
-
-# ==========================================
-# 5. GATE 3 — SENTIMEN REALTIME (BARU)
-# ==========================================
-def ambil_fear_greed():
-    """
-    Ambil Fear & Greed Index dari CoinyBubble.
-    Update ~1 menit. Gratis, tanpa API key.
-    Return: (nilai int 0-100, label str, status str)
-    """
-    try:
-        resp = requests.get(
-            "https://coinybubble.com/api/v1/fear-greed",
-            timeout=5
-        )
-        if resp.status_code == 200:
-            data  = resp.json()
-            nilai = int(data.get('value', 50))
-            label = data.get('value_classification', 'Neutral')
-            return nilai, label, "OK"
-    except Exception:
-        pass
-
-    # Fallback: Alternative.me (update harian tapi tetap berguna sebagai konfirmasi makro)
-    try:
-        resp = requests.get(
-            "https://api.alternative.me/fng/?limit=1&format=json",
-            timeout=5
-        )
-        if resp.status_code == 200:
-            item  = resp.json()['data'][0]
-            nilai = int(item['value'])
-            label = item['value_classification']
-            return nilai, label, "OK (fallback alternative.me)"
-    except Exception:
-        pass
-
-    return 50, "Neutral", "GAGAL"
-
-def ambil_funding_rate():
-    """
-    Ambil funding rate terbaru dari Binance Futures.
-    Positif  → longs bayar shorts → pasar overbullish
-    Negatif  → shorts bayar longs → pasar overbearish
-    Return: (rate float, status str)
-    """
-    try:
-        resp = client_data.mark_price(symbol=SIMBOL)
-        data = parse_resp(resp)
-        rate = float(data.get('lastFundingRate', 0))
-        return rate, "OK"
-    except Exception as e:
-        return 0.0, f"GAGAL: {e}"
-
-def ambil_long_short_ratio():
-    """
-    Ambil Global Long/Short Account Ratio dari Binance.
-    > 1 = lebih banyak akun LONG, < 1 = lebih banyak SHORT.
-    Return: (ratio float, long_pct float, short_pct float, status str)
-    """
-    try:
-        resp = client_data.global_long_short_account_ratio(
-            symbol=SIMBOL,
-            period='5m',
-            limit=1
-        )
-        if resp and len(resp) > 0:
-            item      = resp[0]
-            ls_ratio  = float(item.get('longShortRatio', 1.0))
-            long_pct  = float(item.get('longAccount', 0.5)) * 100
-            short_pct = float(item.get('shortAccount', 0.5)) * 100
-            return ls_ratio, long_pct, short_pct, "OK"
-    except Exception as e:
-        pass
-    return 1.0, 50.0, 50.0, "GAGAL"
-
-def analisis_sentimen_realtime(arah_sinyal):
-    """
-    Gate 3 baru: gabungkan 3 sumber data realtime.
-
-    Sistem poin:
-      Setiap sumber bisa kasih +1 (mendukung arah) / -1 (berlawanan) / 0 (netral)
-      Skor akhir: -3 sampai +3
-        >= +1 → COCOK (lanjut trade)
-        <= -1 → BERLAWANAN (batal)
-        0    → NETRAL (lanjut trade, tapi warning)
-
-    Return: (cocok bool, skor int, rincian list)
-    """
-    global _cache_sentimen
-
-    sekarang = time.time()
-
-    # Gunakan cache kalau belum expired
-    if (_cache_sentimen['data'] is not None and
-            sekarang - _cache_sentimen['last_fetch'] < _cache_sentimen['ttl_detik']):
-        fng_nilai, fng_label, fng_status, \
-        fund_rate, fund_status, \
-        ls_ratio, long_pct, short_pct, ls_status = _cache_sentimen['data']
-    else:
-        fng_nilai, fng_label, fng_status       = ambil_fear_greed()
-        fund_rate, fund_status                 = ambil_funding_rate()
-        ls_ratio, long_pct, short_pct, ls_status = ambil_long_short_ratio()
-
-        _cache_sentimen['data'] = (
-            fng_nilai, fng_label, fng_status,
-            fund_rate, fund_status,
-            ls_ratio, long_pct, short_pct, ls_status
-        )
-        _cache_sentimen['last_fetch'] = sekarang
-
-    skor    = 0
-    rincian = []
-
-    # ── A. FEAR & GREED INDEX ────────────────────────────────────────────────
-    if arah_sinyal == 'LONG':
-        if fng_nilai <= FNG_FEAR_THRESHOLD:
-            skor += 1
-            fng_simbol = "🟢"
-            fng_note   = "FEAR → Peluang LONG (beli saat orang takut)"
-        elif fng_nilai >= FNG_GREED_THRESHOLD:
-            skor -= 1
-            fng_simbol = "🔴"
-            fng_note   = "GREED → Kurang ideal untuk LONG"
-        else:
-            fng_simbol = "⚪"
-            fng_note   = "NEUTRAL"
-    else:  # SHORT
-        if fng_nilai >= FNG_GREED_THRESHOLD:
-            skor += 1
-            fng_simbol = "🟢"
-            fng_note   = "GREED → Pasar overbullish, SHORT ideal"
-        elif fng_nilai <= FNG_FEAR_THRESHOLD:
-            skor -= 1
-            fng_simbol = "🔴"
-            fng_note   = "FEAR → Kurang ideal untuk SHORT"
-        else:
-            fng_simbol = "⚪"
-            fng_note   = "NEUTRAL"
-
-    rincian.append(
-        f"   {fng_simbol} F&G Index : {fng_nilai}/100 ({fng_label}) → {fng_note}"
-        + (f" [{fng_status}]" if fng_status != "OK" else "")
+    client = UMFutures(
+        key      = Config.BINANCE_API_KEY,
+        secret   = Config.BINANCE_API_SECRET,
+        base_url = Config.BINANCE_BASE_URL,
     )
+    client.ping()   # Cek koneksi
+    mode = "TESTNET ⚠️" if "testnet" in Config.BINANCE_BASE_URL else "LIVE 🔴"
+    log.info(f"✅ Binance Futures ({mode}) — terhubung")
+    return client
 
-    # ── B. FUNDING RATE ──────────────────────────────────────────────────────
-    fund_pct = fund_rate * 100
-    if arah_sinyal == 'LONG':
-        if fund_rate <= FUNDING_BEARISH_THRESHOLD:
-            skor += 1
-            fr_simbol = "🟢"
-            fr_note   = f"Negatif ({fund_pct:.4f}%) → shorts bayar longs, LONG menguntungkan"
-        elif fund_rate >= FUNDING_BULLISH_THRESHOLD:
-            skor -= 1
-            fr_simbol = "🔴"
-            fr_note   = f"Positif tinggi ({fund_pct:.4f}%) → LONG harus bayar, kurang ideal"
-        else:
-            fr_simbol = "⚪"
-            fr_note   = f"Netral ({fund_pct:.4f}%)"
-    else:  # SHORT
-        if fund_rate >= FUNDING_BULLISH_THRESHOLD:
-            skor += 1
-            fr_simbol = "🟢"
-            fr_note   = f"Positif ({fund_pct:.4f}%) → longs bayar shorts, SHORT menguntungkan"
-        elif fund_rate <= FUNDING_BEARISH_THRESHOLD:
-            skor -= 1
-            fr_simbol = "🔴"
-            fr_note   = f"Negatif ({fund_pct:.4f}%) → SHORT harus bayar, kurang ideal"
-        else:
-            fr_simbol = "⚪"
-            fr_note   = f"Netral ({fund_pct:.4f}%)"
 
-    rincian.append(
-        f"   {fr_simbol} Funding Rate: {fr_note}"
-        + (f" [{fund_status}]" if fund_status != "OK" else "")
-    )
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║           3. SUPABASE MANAGER — History & Winrate                   ║
+# ╚══════════════════════════════════════════════════════════════════════╝
 
-    # ── C. LONG/SHORT RATIO ──────────────────────────────────────────────────
-    if arah_sinyal == 'LONG':
-        if ls_ratio <= LS_RATIO_SHORT_HEAVY:
-            skor += 1
-            ls_simbol = "🟢"
-            ls_note   = f"Banyak SHORT ({short_pct:.1f}%) → potensi short squeeze, LONG oke"
-        elif ls_ratio >= LS_RATIO_LONG_HEAVY:
-            skor -= 1
-            ls_simbol = "🔴"
-            ls_note   = f"Terlalu banyak LONG ({long_pct:.1f}%) → crowded, risiko"
-        else:
-            ls_simbol = "⚪"
-            ls_note   = f"Seimbang (Long {long_pct:.1f}% / Short {short_pct:.1f}%)"
-    else:  # SHORT
-        if ls_ratio >= LS_RATIO_LONG_HEAVY:
-            skor += 1
-            ls_simbol = "🟢"
-            ls_note   = f"Terlalu banyak LONG ({long_pct:.1f}%) → crowded, SHORT ideal"
-        elif ls_ratio <= LS_RATIO_SHORT_HEAVY:
-            skor -= 1
-            ls_simbol = "🔴"
-            ls_note   = f"Banyak SHORT ({short_pct:.1f}%) → crowded short, kurang ideal"
-        else:
-            ls_simbol = "⚪"
-            ls_note   = f"Seimbang (Long {long_pct:.1f}% / Short {short_pct:.1f}%)"
-
-    rincian.append(
-        f"   {ls_simbol} L/S Ratio  : {ls_ratio:.2f} → {ls_note}"
-        + (f" [{ls_status}]" if ls_status != "OK" else "")
-    )
-
-    # ── Kesimpulan ────────────────────────────────────────────────────────────
-    if skor >= 1:
-        kesimpulan = "COCOK ✅"
-        cocok      = True
-    elif skor <= -1:
-        kesimpulan = "BERLAWANAN ❌"
-        cocok      = False
-    else:
-        kesimpulan = "NETRAL ⚠️ (lanjut dengan hati-hati)"
-        cocok      = True   # Netral = boleh lanjut tapi dengan warning
-
-    rincian.append(f"   📊 Skor Sentimen: {skor:+d}/3 → {kesimpulan}")
-    return cocok, skor, rincian
-
-# ==========================================
-# 6. ANALISIS LIVE (GATE 1)
-# ==========================================
-def ambil_data_live():
-    try:
-        klines = client_data.klines(symbol=SIMBOL, interval=TIMEFRAME, limit=500)
-        df     = ohlcv_ke_dataframe(klines)
-
-        # EMA disesuaikan untuk 1m
-        df['EMA_50']  = ta.ema(df['close'], length=EMA_PENDEK)
-        df['EMA_200'] = ta.ema(df['close'], length=EMA_PANJANG)
-        df['RSI_14']  = ta.rsi(df['close'], length=14)
-        df['ATR']     = ta.atr(df['high'], df['low'], df['close'], length=14)
-
-        # MACD cepat untuk 1m
-        macd_col      = f'MACD_{MACD_FAST}_{MACD_SLOW}_{MACD_SIGNAL}'
-        macd_sig_col  = f'MACDs_{MACD_FAST}_{MACD_SLOW}_{MACD_SIGNAL}'
-        macd_hist_col = f'MACDh_{MACD_FAST}_{MACD_SLOW}_{MACD_SIGNAL}'
-        macd_data = ta.macd(df['close'], fast=MACD_FAST, slow=MACD_SLOW, signal=MACD_SIGNAL)
-        if macd_data is not None:
-            df = pd.concat([df, macd_data], axis=1)
-        df['MACD_12_26_9']  = df.get(macd_col,      pd.Series(0, index=df.index))
-        df['MACDs_12_26_9'] = df.get(macd_sig_col,  pd.Series(0, index=df.index))
-        df['MACDh_12_26_9'] = df.get(macd_hist_col, pd.Series(0, index=df.index))
-
-        # OBV — satu-satunya volume indicator yang dipertahankan
-        df['OBV']     = ta.obv(df['close'], df['volume'])
-        df['OBV_EMA'] = ta.ema(df['OBV'], length=20)
-
-        # Alias untuk AI
-        df['RSI']          = df['RSI_14']
-        df['MACD_Line']    = df['MACD_12_26_9']
-        df['MACD_Hist']    = df['MACDh_12_26_9']
-        df['Jarak_ke_EMA'] = df['close'] - df['EMA_200']
-        df['STOCH_K']      = 50   # placeholder agar fitur_ai tidak error
-        return df
-    except Exception as e:
-        print(f"⚠️ Gagal ambil data: {e}")
-        return None
-
-def hitung_skor_teknikal(bar, df, idx):
+class SupabaseManager:
     """
-    Gate 1 — Lean 3-Indicator System (sinkron dengan ML)
-    (Versi yang lebih longgar agar bot lebih reaktif)
+    Semua operasi database transaksi:
+      - insert_trade  : catat order baru (status=OPEN)
+      - close_trade   : update saat posisi selesai (WIN/LOSS + PnL)
+      - get_stats     : hitung dan tampilkan winrate + metrik performa
+      - get_open_trades : ambil posisi yang masih terbuka
     """
-    rincian_long  = {}
-    rincian_short = {}
-    skor_long     = 0
-    skor_short    = 0
-    confluence_long  = 0
-    confluence_short = 0
 
-    h      = bar['close']
-    ema50  = bar['EMA_50']
-    ema200 = bar['EMA_200']
+    def __init__(self):
+        self.db: SupabaseClient = create_client(
+            Config.SUPABASE_URL,
+            Config.SUPABASE_KEY,
+        )
+        log.info("✅ Supabase — terhubung")
 
-    macd_line = bar.get('MACD_12_26_9',  0)
-    macd_sig  = bar.get('MACDs_12_26_9', 0)
-    macd_hist = bar.get('MACDh_12_26_9', 0)
-    
-    rsi       = bar['RSI_14']
-    rsi_c1    = df.iloc[idx - 1]['RSI_14'] if idx >= 1 else rsi
-    obv       = bar.get('OBV',     0)
-    obv_ema   = bar.get('OBV_EMA', 0)
-
-    # DILONGGARKAN: Jarak ke EMA dari 0.15% jadi 0.05% agar tren lebih cepat terdeteksi
-    MARGIN_EMA      = 0.0005 
-    jarak_h_ema50   = ((h - ema50)  / ema50)  * 100
-    jarak_ema50_200 = ((ema50 - ema200) / ema200) * 100
-
-    col_hist   = 'MACDh_12_26_9'
-    hist_mean  = df[col_hist].iloc[max(0, idx-20):idx].abs().mean() if col_hist in df.columns and idx >= 20 else 1
-    hist_ratio = abs(macd_hist) / hist_mean if hist_mean > 0 else 1.0
-
-    obv_diverge_pct = ((obv - obv_ema) / abs(obv_ema)) * 100 if obv_ema != 0 else 0
-
-    # =========================================================================
-    # BULLISH — 3 indikator
-    # =========================================================================
-
-    # 1. EMA Trend LONG (bobot 30-40)
-    ema_long = (h > ema50 * (1 + MARGIN_EMA)) and (ema50 > ema200)
-    if ema_long:
-        d = abs(jarak_h_ema50)
-        if d > 0.8:   bobot = 40; lvl = "💪 SANGAT KUAT"
-        elif d > 0.4: bobot = 35; lvl = "✊ KUAT"
-        else:         bobot = 30; lvl = "👌 NORMAL"
-        skor_long += bobot; confluence_long += 1
-        rincian_long['📈 EMA'] = f"🟢 UPTREND {lvl} (+{bobot}) | H+{jarak_h_ema50:.2f}%"
-    else:
-        rincian_long['📈 EMA'] = f"⚪ Tidak aktif | H-EMA50: {jarak_h_ema50:+.2f}%"
-
-    # 2. MACD LONG (bobot 25-35)
-    macd_long = macd_line > macd_sig and macd_hist > 0
-    if macd_long:
-        if hist_ratio > 1.5:   bobot = 35; lvl = f"💪 SANGAT KUAT ({hist_ratio:.1f}x)"
-        elif hist_ratio > 0.8: bobot = 30; lvl = f"✊ KUAT ({hist_ratio:.1f}x)"
-        else:                  bobot = 25; lvl = f"👌 NORMAL ({hist_ratio:.1f}x)"
-        skor_long += bobot; confluence_long += 1
-        rincian_long['📈 MACD'] = f"🟢 BULLISH {lvl} (+{bobot})"
-    else:
-        rincian_long['📈 MACD'] = f"⚪ Tidak aktif | hist: {macd_hist:.2f}"
-
-    # 3. OBV LONG (bobot 20-25)
-    obv_long = obv > obv_ema
-    if obv_long:
-        d = abs(obv_diverge_pct)
-        if d > 3:   bobot = 25; lvl = f"💪 KUAT (+{obv_diverge_pct:.1f}%)"
-        elif d > 1: bobot = 22; lvl = f"✊ SEDANG (+{obv_diverge_pct:.1f}%)"
-        else:       bobot = 20; lvl = f"👌 LEMAH (+{obv_diverge_pct:.1f}%)"
-        skor_long += bobot; confluence_long += 1
-        rincian_long['📈 OBV'] = f"🟢 TEKANAN BELI {lvl} (+{bobot})"
-    else:
-        rincian_long['📈 OBV'] = f"⚪ Tidak aktif | OBV-EMA: {obv_diverge_pct:.1f}%"
-
-    # =========================================================================
-    # BEARISH — 3 indikator
-    # =========================================================================
-
-    # 1. EMA Trend SHORT (bobot 30-40)
-    ema_short = (h < ema50 * (1 - MARGIN_EMA)) and (ema50 < ema200)
-    if ema_short:
-        d = abs(jarak_h_ema50)
-        if d > 0.8:   bobot = 40; lvl = "💪 SANGAT KUAT"
-        elif d > 0.4: bobot = 35; lvl = "✊ KUAT"
-        else:         bobot = 30; lvl = "👌 NORMAL"
-        skor_short += bobot; confluence_short += 1
-        rincian_short['📉 EMA'] = f"🔴 DOWNTREND {lvl} (+{bobot}) | H{jarak_h_ema50:.2f}%"
-    else:
-        rincian_short['📉 EMA'] = f"⚪ Tidak aktif | H-EMA50: {jarak_h_ema50:+.2f}%"
-
-    # 2. MACD SHORT (bobot 25-35)
-    macd_short = macd_line < macd_sig and macd_hist < 0
-    if macd_short:
-        if hist_ratio > 1.5:   bobot = 35; lvl = f"💪 SANGAT KUAT ({hist_ratio:.1f}x)"
-        elif hist_ratio > 0.8: bobot = 30; lvl = f"✊ KUAT ({hist_ratio:.1f}x)"
-        else:                  bobot = 25; lvl = f"👌 NORMAL ({hist_ratio:.1f}x)"
-        skor_short += bobot; confluence_short += 1
-        rincian_short['📉 MACD'] = f"🔴 BEARISH {lvl} (+{bobot})"
-    else:
-        rincian_short['📉 MACD'] = f"⚪ Tidak aktif | hist: {macd_hist:.2f}"
-
-    # 3. RSI Overbought SHORT (bobot 25-35)
-    # DILONGGARKAN: Hanya butuh 1 candle turun dari area > 60
-    rsi_turun = rsi < rsi_c1
-    rsi_short_ok = rsi > 60 and rsi_turun
-    if rsi_short_ok:
-        if rsi > 75:   bobot = 35; lvl = f"💪 EKSTREM ({rsi:.1f})"
-        elif rsi > 68: bobot = 30; lvl = f"✊ TINGGI ({rsi:.1f})"
-        else:          bobot = 25; lvl = f"👌 OB ({rsi:.1f})"
-        skor_short += bobot; confluence_short += 1
-        rincian_short[f'📉 RSI'] = f"🔴 OVERBOUGHT TURUN {lvl} (+{bobot})"
-    else:
-        rincian_short[f'📉 RSI'] = f"⚪ Tidak aktif | RSI: {rsi:.1f}"
-
-    # =========================================================================
-    # CONFLUENCE BONUS
-    # =========================================================================
-    TABEL_BONUS  = {1: 0, 2: 15, 3: 30}
-    bonus_long   = TABEL_BONUS.get(confluence_long,  0)
-    bonus_short  = TABEL_BONUS.get(confluence_short, 0)
-
-    if confluence_long > confluence_short and bonus_long > 0:
-        skor_long += bonus_long
-        bonus_info = f"🟢 {confluence_long}/3 LONG agree → +{bonus_long}"
-    elif confluence_short > confluence_long and bonus_short > 0:
-        skor_short += bonus_short
-        bonus_info = f"🔴 {confluence_short}/3 SHORT agree → +{bonus_short}"
-    else:
-        bonus_info = f"⚪ Terbagi ({confluence_long}L/{confluence_short}S) → +0"
-
-    # =========================================================================
-    # SUSUN OUTPUT
-    # =========================================================================
-    rincian = {}
-    rincian['─── BULLISH ───'] = ''
-    for k, v in rincian_long.items():  rincian[k] = v
-    rincian['─── BEARISH ───'] = ''
-    for k, v in rincian_short.items(): rincian[k] = v
-    rincian['🔥 Confluence'] = bonus_info
-    rincian['📊 Skor'] = (
-        f"LONG {skor_long} | SHORT {skor_short}"
-    )
-
-    return min(skor_long, 130), min(skor_short, 130), rincian
-
-# ==========================================
-# HELPER SALDO
-# ==========================================
-def ambil_saldo_usdt():
-    try:
-        data = parse_resp(client_trade.account())
-        for asset in data.get('assets', []):
-            if asset.get('asset') == 'USDT':
-                return float(asset.get('walletBalance', 0))
-    except Exception:
-        pass
-    return 0.0
-
-# ==========================================
-# 7. LOOP UTAMA
-# ==========================================
-setup_leverage()
-model_ai_global = latih_ai_diawal()
-print(f"\n🚀 Bot FUTURES v4.6 — Lean 3-Indicator Gate 1 (5m)")
-print(f"   EMA      : {EMA_PENDEK}/{EMA_PANJANG} | MACD: {MACD_FAST},{MACD_SLOW},{MACD_SIGNAL} | Stoch: {STOCH_K},{STOCH_D},{STOCH_S}")
-print(f"   RSI cek  : {RSI_KONSISTENSI_CANDLE} candle | Loop: {LOOP_DELAY}s | SL ATR: {SL_AWAL_ATR_MULTIPLIER}x | Trail ATR: {TRAILING_ATR_MULTIPLIER}x")
-print(f"   Gate 3 baru: Fear&Greed + Funding Rate + Long/Short Ratio")
-print(f"   (Menggantikan RSS+FinBERT yang lag berjam-jam)")
-print(f"   Pasar    : {SIMBOL_DISPLAY} Perpetual Futures (Testnet)")
-print(f"   Leverage : {LEVERAGE}x  |  Modal/Trade: ${MARGIN_USDT}")
-print(f"   Timeframe: {TIMEFRAME}\n")
-
-# ── State candle tracker ─────────────────────────────────────────────────────
-# Dipakai loop cerdas: analisis berat hanya jalan saat candle baru terbentuk
-_last_candle_time = 0
-_df_cache         = None      # cache df terakhir untuk mode pelacakan
-_balance_cache    = 0.0
-_balance_ts       = 0
-
-def ambil_harga_cepat():
-    """Fetch harga terkini — ringan, hanya 1 request kecil."""
-    try:
-        resp = client_data.ticker_price(symbol=SIMBOL)
-        return float(parse_resp(resp).get('price', 0))
-    except Exception:
-        return 0.0
-
-def ambil_saldo_cached():
-    """Fetch saldo USDT dengan cache 30 detik — tidak perlu fetch setiap 2 detik."""
-    global _balance_cache, _balance_ts
-    if time.time() - _balance_ts > 30:
-        _balance_cache = ambil_saldo_usdt()
-        _balance_ts    = time.time()
-    return _balance_cache
-
-def candle_baru_terbentuk():
-    """
-    Cek apakah candle baru sudah terbentuk berdasarkan server time Binance.
-    Cara: floor server time ke interval candle → bandingkan dengan candle terakhir.
-    Contoh 1m: floor ke menit → tiap menit angka berubah = candle baru.
-    """
-    global _last_candle_time
-    try:
-        server_time  = parse_resp(client_data.time()).get('serverTime', 0)
-        # Interval dalam milidetik
-        interval_map = {
-            '1m': 60_000, '3m': 180_000, '5m': 300_000,
-            '15m': 900_000, '30m': 1_800_000, '1h': 3_600_000
-        }
-        interval_ms  = interval_map.get(TIMEFRAME, 60_000)
-        candle_time  = (server_time // interval_ms) * interval_ms
-
-        if candle_time > _last_candle_time:
-            _last_candle_time = candle_time
-            return True
-        return False
-    except Exception:
-        return False
-
-def loop_pelacakan(harga_skrg):
-    """
-    Loop CEPAT — dijalankan setiap LOOP_DELAY detik saat ada posisi terbuka.
-    Hanya fetch harga (1 request ringan) + update trailing SL.
-    Tidak fetch klines, tidak hitung indikator.
-    """
-    global sedang_ada_posisi, id_order_sl_server, arah_posisi
-
-    # Cek apakah SL sudah kena
-    if id_order_sl_server:
+    # ── INSERT trade baru ─────────────────────────────────────────────
+    def insert_trade(self, payload: dict) -> str | None:
+        """
+        Simpan record trade baru ke tabel `trades`.
+        Return UUID row yang baru (dipakai untuk update saat close).
+        """
         try:
-            resp         = client_trade.query_order(symbol=SIMBOL, orderId=id_order_sl_server)
-            order_info   = parse_resp(resp)
-            if order_info.get('status', '') in ('FILLED', 'CANCELED', 'EXPIRED'):
-                harga_exit = float(order_info.get('avgPrice') or harga_sl_server_saat_ini)
-                pnl_akhir  = hitung_pnl(harga_exit, harga_entry_sekarang, lot_sekarang, arah_posisi)
-                pnl_persen = (pnl_akhir / MARGIN_USDT) * 100
-                simpan_ke_db({
-                    'Waktu'      : datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'Simbol'     : SIMBOL_DISPLAY, 'Side': arah_posisi,
-                    'Entry'      : harga_entry_sekarang, 'Exit': harga_exit,
-                    'Lot'        : lot_sekarang, 'Leverage': LEVERAGE,
-                    'Margin_USDT': MARGIN_USDT,
-                    'PnL_USD'    : round(pnl_akhir, 2),
-                    'PnL_Persen' : round(pnl_persen, 2),
-                    'Status'     : 'CLOSED_BY_TRAILING_SL'
-                })
-                print(f"\n🔔 POSISI CLOSED! PnL: ${pnl_akhir:.2f} ({pnl_persen:+.1f}%)")
-                sedang_ada_posisi = False
-                id_order_sl_server = None
-                arah_posisi = None
-                return
-        except Exception:
-            pass
-
-    # Update trailing SL
-    perlu_update = False
-    calon_sl     = 0
-    if arah_posisi == 'LONG' and harga_skrg > harga_ekstrem_posisi:
-        globals()['harga_ekstrem_posisi'] = harga_skrg
-        calon_sl = round(harga_skrg - TRAILING_ATR_MULTIPLIER * atr_posisi, 2)
-        if calon_sl > harga_sl_server_saat_ini: perlu_update = True
-    elif arah_posisi == 'SHORT' and harga_skrg < harga_ekstrem_posisi:
-        globals()['harga_ekstrem_posisi'] = harga_skrg
-        calon_sl = round(harga_skrg + TRAILING_ATR_MULTIPLIER * atr_posisi, 2)
-        if calon_sl < harga_sl_server_saat_ini: perlu_update = True
-
-    if perlu_update:
-        print(f"🔄 Geser SL → ${calon_sl}")
-        try:
-            if id_order_sl_server:
-                client_trade.cancel_order(symbol=SIMBOL, orderId=id_order_sl_server)
-            id_baru = pasang_sl_server(calon_sl, arah_posisi)
-            if id_baru:
-                globals()['id_order_sl_server']       = id_baru
-                globals()['harga_sl_server_saat_ini'] = calon_sl
+            res      = self.db.table(Config.SUPABASE_TABLE).insert(payload).execute()
+            trade_id = res.data[0]["id"]
+            log.info(f"📝 Trade baru dicatat | ID: {trade_id[:8]}...")
+            return trade_id
         except Exception as e:
-            print(f"⚠️ Gagal update SL: {e}")
+            log.error(f"❌ Supabase insert gagal: {e}")
+            return None
 
-    # Tampilkan status ringkas
-    profit = hitung_pnl(harga_skrg, harga_entry_sekarang, lot_sekarang, arah_posisi)
-    pct    = (profit / MARGIN_USDT) * 100
-    tanda  = "+" if profit >= 0 else ""
-    emoji  = "📈 LONG" if arah_posisi == 'LONG' else "📉 SHORT"
-    print(f"🛡️ [{emoji}] ${harga_skrg:.2f} | PnL: {tanda}${profit:.2f} ({tanda}{pct:.1f}%) | SL: ${harga_sl_server_saat_ini:.2f}")
+    # ── UPDATE saat trade close ───────────────────────────────────────
+    def close_trade(self, trade_id: str, exit_price: float,
+                    pnl: float, pnl_pct: float, status: str) -> bool:
+        """
+        Tutup trade: isi exit_price, pnl, pnl_pct, dan status (WIN/LOSS).
+        Dipanggil oleh PositionMonitor saat posisi sudah tidak aktif di Binance.
+        """
+        try:
+            self.db.table(Config.SUPABASE_TABLE).update({
+                "exit_price" : round(exit_price, 4),
+                "pnl"        : round(pnl, 4),
+                "pnl_pct"    : round(pnl_pct, 6),
+                "status"     : status,
+            }).eq("id", trade_id).execute()
 
-def loop_radar(df, harga_skrg):
+            icon = "🟢 WIN" if status == "WIN" else "🔴 LOSS"
+            log.info(
+                f"{icon} | ID={trade_id[:8]}... | "
+                f"exit={exit_price:.2f} | PnL={pnl:+.4f} USDT ({pnl_pct:+.2%})"
+            )
+            return True
+        except Exception as e:
+            log.error(f"❌ Supabase close_trade gagal: {e}")
+            return False
+
+    # ── QUERY winrate & statistik performa ───────────────────────────
+    def get_stats(self) -> dict:
+        """
+        Hitung statistik lengkap dari semua trade yang sudah selesai (bukan OPEN).
+
+        Metrics yang dihitung:
+          - Winrate keseluruhan (%)
+          - Winrate LONG vs SHORT terpisah
+          - Total PnL kumulatif
+          - Rata-rata PnL per trade
+          - Trade terbaik dan terburuk
+          - Profit factor (gross profit / gross loss)
+        """
+        try:
+            res  = (
+                self.db.table(Config.SUPABASE_TABLE)
+                .select("status, pnl, pnl_pct, side")
+                .neq("status", "OPEN")
+                .execute()
+            )
+            rows = res.data
+
+            if not rows:
+                log.info("📊 Belum ada trade yang selesai.")
+                return self._empty_stats()
+
+            df      = pd.DataFrame(rows)
+            total   = len(df)
+            wins    = len(df[df["status"] == "WIN"])
+            losses  = len(df[df["status"] == "LOSS"])
+            winrate = (wins / total * 100) if total > 0 else 0.0
+
+            pnl_series  = df["pnl"].astype(float)
+            total_pnl   = pnl_series.sum()
+            avg_pnl     = pnl_series.mean()
+            best_trade  = pnl_series.max()
+            worst_trade = pnl_series.min()
+
+            # Profit factor = gross profit / |gross loss|
+            gross_profit = pnl_series[pnl_series > 0].sum()
+            gross_loss   = abs(pnl_series[pnl_series < 0].sum())
+            profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else float("inf")
+
+            # Winrate per sisi
+            long_df   = df[df["side"] == "LONG"]
+            short_df  = df[df["side"] == "SHORT"]
+            long_wr   = _wr(long_df)
+            short_wr  = _wr(short_df)
+
+            # Streak win/loss saat ini
+            streak    = self._calc_streak(df)
+
+            stats = {
+                "total_trades"  : total,
+                "wins"          : wins,
+                "losses"        : losses,
+                "winrate_pct"   : round(winrate, 2),
+                "total_pnl"     : round(total_pnl, 4),
+                "avg_pnl"       : round(avg_pnl, 4),
+                "best_trade"    : round(best_trade, 4),
+                "worst_trade"   : round(worst_trade, 4),
+                "profit_factor" : round(profit_factor, 3),
+                "long_winrate"  : round(long_wr, 2),
+                "short_winrate" : round(short_wr, 2),
+                "current_streak": streak,
+            }
+
+            self._print_stats(stats)
+            return stats
+
+        except Exception as e:
+            log.error(f"❌ Gagal hitung stats: {e}")
+            return self._empty_stats()
+
+    # ── Helper: current streak ────────────────────────────────────────
+    @staticmethod
+    def _calc_streak(df: pd.DataFrame) -> str:
+        """Hitung streak WIN/LOSS terkini dari riwayat terbaru."""
+        statuses = df["status"].tolist()[::-1]  # Terbaru di depan
+        if not statuses:
+            return "–"
+        current  = statuses[0]
+        count    = 1
+        for s in statuses[1:]:
+            if s == current:
+                count += 1
+            else:
+                break
+        return f"{count}× {current}"
+
+    @staticmethod
+    def _print_stats(s: dict):
+        log.info(
+            f"\n{'═'*56}\n"
+            f"  📊  STATISTIK PERFORMA BOT\n"
+            f"{'─'*56}\n"
+            f"  Total Trade    : {s['total_trades']:>6} trade\n"
+            f"  WIN / LOSS     : {s['wins']:>3} WIN  /  {s['losses']:>3} LOSS\n"
+            f"  Winrate        : {s['winrate_pct']:>7.2f} %\n"
+            f"{'─'*56}\n"
+            f"  Winrate LONG   : {s['long_winrate']:>7.2f} %\n"
+            f"  Winrate SHORT  : {s['short_winrate']:>7.2f} %\n"
+            f"{'─'*56}\n"
+            f"  Total PnL      : {s['total_pnl']:>+10.4f} USDT\n"
+            f"  Avg PnL/Trade  : {s['avg_pnl']:>+10.4f} USDT\n"
+            f"  Profit Factor  : {s['profit_factor']:>10.3f}\n"
+            f"  Best Trade     : {s['best_trade']:>+10.4f} USDT\n"
+            f"  Worst Trade    : {s['worst_trade']:>+10.4f} USDT\n"
+            f"  Streak Kini    : {s['current_streak']}\n"
+            f"{'═'*56}"
+        )
+
+    # ── Ambil posisi yang masih OPEN ──────────────────────────────────
+    def get_open_trades(self) -> list[dict]:
+        try:
+            res = (
+                self.db.table(Config.SUPABASE_TABLE)
+                .select("*")
+                .eq("status", "OPEN")
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            log.error(f"❌ Gagal ambil open trades: {e}")
+            return []
+
+    @staticmethod
+    def _empty_stats() -> dict:
+        return {
+            "total_trades": 0, "wins": 0, "losses": 0,
+            "winrate_pct": 0.0, "total_pnl": 0.0, "avg_pnl": 0.0,
+            "best_trade": 0.0, "worst_trade": 0.0, "profit_factor": 0.0,
+            "long_winrate": 0.0, "short_winrate": 0.0, "current_streak": "–",
+        }
+
+
+def _wr(df: pd.DataFrame) -> float:
+    """Helper kecil hitung winrate dari sub-dataframe."""
+    if len(df) == 0:
+        return 0.0
+    return len(df[df["status"] == "WIN"]) / len(df) * 100
+
+
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║             4. DATA FETCHER (Binance Native SDK)                    ║
+# ╚══════════════════════════════════════════════════════════════════════╝
+
+class DataFetcher:
     """
-    Loop LAMBAT — dijalankan hanya saat candle baru terbentuk.
-    Menjalankan semua Gate 1, 2, 3 dan eksekusi order kalau sinyal valid.
+    Semua pengambilan data pakai UMFutures dari binance-futures-connector.
+    Output selalu berupa DataFrame ber-index datetime UTC.
     """
-    global sedang_ada_posisi, arah_posisi, harga_entry_sekarang
-    global lot_sekarang, id_order_sl_server, harga_sl_server_saat_ini
-    global harga_ekstrem_posisi, atr_posisi
 
-    idx_bar      = len(df) - 2
-    bar_terakhir = df.iloc[idx_bar]
-    skor_long, skor_short, rincian = hitung_skor_teknikal(bar_terakhir, df, idx_bar)
+    _INTERVAL_MS = {
+        "1m": 60_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
+        "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000,
+    }
 
-    data_ai      = df.iloc[idx_bar:idx_bar+1][fitur_ai]
-    probabilitas = model_ai_global.predict_proba(data_ai)[0]
-    prob_naik    = probabilitas[1] * 100
-    prob_turun   = probabilitas[0] * 100
+    def __init__(self, client: UMFutures):
+        self.client = client
 
-    total_trade, win_trade, win_rate = hitung_win_rate()
-    current_usdt = ambil_saldo_cached()
+    # ── OHLCV real-time (untuk sinyal) ───────────────────────────────
+    def fetch_ohlcv(self, symbol: str, interval: str, limit: int = 500) -> pd.DataFrame:
+        """
+        Ambil N candle terakhir.
+        Dipakai setiap siklus 15 menit untuk sinyal entry.
+        """
+        raw = self.client.klines(symbol=symbol, interval=interval, limit=limit)
+        return self._parse_klines(raw)
 
-    print(f"\n{'='*65}")
-    print(f"📡 RADAR 3-GATE v4.5 ({TIMEFRAME}) | Candle baru | Live: ${harga_skrg:.2f}")
-    print(f"💰 Balance: ${current_usdt:.2f}  |  Leverage: {LEVERAGE}x")
-    print(f"🏆 Win Rate: {win_rate:.1f}% ({win_trade}/{total_trade})")
-    print(f"{'='*65}")
-    print(f"1️⃣  GATE 1: TEKNIKAL")
-    for k, v in rincian.items():
-        if v:  # skip separator kosong
-            print(f"   {k.ljust(28)} : {v}")
-        else:
-            print(f"   {k}")
-    print(f"\n   SKOR LONG: {skor_long}  |  SKOR SHORT: {skor_short}  (≥{AMBANG_TEKNIKAL})")
+    # ── OHLCV bulk historis (untuk training ML) ───────────────────────
+    def fetch_ohlcv_bulk(self, symbol: str, interval: str, years: int = 3) -> pd.DataFrame:
+        """
+        Ambil data historis besar dengan loop iteratif.
+        Binance izinkan max 1.500 candle per request, jadi kita loop.
+        Target minimum: 10.000 baris sesuai Config.MIN_TRAIN_ROWS.
+        """
+        now_ms   = int(datetime.now(timezone.utc).timestamp() * 1000)
+        start_ms = now_ms - years * 365 * 24 * 3_600_000   # Approx N tahun ke belakang
+        all_rows = []
 
-    print(f"\n2️⃣  GATE 2: AI ML")
-    print(f"   Prob NAIK: {prob_naik:.1f}%  |  Prob TURUN: {prob_turun:.1f}%  (≥{AMBANG_AI}%)")
-    print(f"{'-'*65}")
+        log.info(f"📥 Bulk fetch: {symbol} {interval} — {years} tahun terakhir...")
 
-    sinyal_long  = skor_long  >= AMBANG_TEKNIKAL and prob_naik  >= AMBANG_AI
-    sinyal_short = skor_short >= AMBANG_TEKNIKAL and prob_turun >= AMBANG_AI
-
-    if sinyal_long or sinyal_short:
-        arah_sinyal = 'LONG' if sinyal_long else 'SHORT'
-        if sinyal_long and sinyal_short:
-            arah_sinyal = 'LONG' if skor_long >= skor_short else 'SHORT'
-
-        print(f"3️⃣  GATE 3: SENTIMEN REALTIME")
-        print(f"   📡 Sinyal {arah_sinyal} terdeteksi → cek sentimen...")
-        cocok, skor_sentimen, rincian_sentimen = analisis_sentimen_realtime(arah_sinyal)
-        for teks in rincian_sentimen:
-            print(teks)
-        print(f"{'-'*65}")
-
-        if not cocok:
-            print(f"⛔ BATAL {arah_sinyal}: Sentimen berlawanan (skor {skor_sentimen:+d})")
-        else:
-            label = "⚠️  NETRAL" if skor_sentimen == 0 else "🔥 ULTIMATE CONFLUENCE!"
-            print(f"{label} → Eksekusi {arah_sinyal}...")
-            lot = hitung_lot(harga_skrg)
+        current = start_ms
+        while current < now_ms:
             try:
-                sisi_entry    = 'BUY'  if arah_sinyal == 'LONG' else 'SELL'
-                position_side = 'LONG' if arah_sinyal == 'LONG' else 'SHORT'
-                resp_entry    = client_trade.new_order(
-                    symbol=SIMBOL, side=sisi_entry,
-                    type='MARKET', quantity=lot,
-                    positionSide=position_side
+                raw = self.client.klines(
+                    symbol    = symbol,
+                    interval  = interval,
+                    startTime = current,
+                    limit     = 1500,
                 )
-                data_entry           = parse_resp(resp_entry)
-                harga_entry_sekarang = float(data_entry.get('avgPrice') or harga_skrg) or harga_skrg
-                lot_sekarang         = lot
-                atr_nilai            = float(bar_terakhir['ATR'])
-                atr_posisi           = atr_nilai
-                harga_ekstrem_posisi = harga_entry_sekarang
-                harga_sl_awal        = round(
-                    harga_entry_sekarang - SL_AWAL_ATR_MULTIPLIER * atr_nilai, 2
-                ) if arah_sinyal == 'LONG' else round(
-                    harga_entry_sekarang + SL_AWAL_ATR_MULTIPLIER * atr_nilai, 2
-                )
-                id_sl = pasang_sl_server(harga_sl_awal, arah_sinyal)
-                if id_sl:
-                    id_order_sl_server       = id_sl
-                    harga_sl_server_saat_ini = harga_sl_awal
-                    arah_posisi              = arah_sinyal
-                    sedang_ada_posisi        = True
-                    print(f"✅ {arah_sinyal} Entry: ${harga_entry_sekarang:.2f} | Lot: {lot} | SL: ${harga_sl_awal:.2f}")
-                else:
-                    print("⚠️ Gagal pasang SL! Tutup posisi otomatis.")
-                    client_trade.new_order(
-                        symbol=SIMBOL,
-                        side='SELL' if arah_sinyal == 'LONG' else 'BUY',
-                        type='MARKET', quantity=lot,
-                        positionSide=position_side, reduceOnly='true'
-                    )
             except ClientError as e:
-                print(f"❌ Gagal Eksekusi (ClientError): {e}")
-            except Exception as e:
-                print(f"❌ Gagal Eksekusi: {e}")
-    else:
-        if skor_long < AMBANG_TEKNIKAL and skor_short < AMBANG_TEKNIKAL:
-            print("💤 Gate 1 Gagal — tunggu formasi teknikal...")
+                log.error(f"❌ Binance API error: {e}")
+                break
+
+            if not raw:
+                break
+
+            all_rows.extend(raw)
+            current = int(raw[-1][0]) + 1
+            time.sleep(0.3)     # Jaga rate limit Binance
+
+        df = self._parse_klines(all_rows).drop_duplicates()
+        log.info(f"✅ Bulk fetch selesai — {len(df):,} baris")
+
+        if len(df) < Config.MIN_TRAIN_ROWS:
+            log.warning(
+                f"⚠️  {len(df):,} baris < minimum {Config.MIN_TRAIN_ROWS:,}. "
+                f"Coba naikkan TRAIN_YEARS atau ganti ke timeframe lebih kecil."
+            )
+        return df
+
+    # ── Funding Rate ──────────────────────────────────────────────────
+    def fetch_funding_rate(self, symbol: str) -> float:
+        """
+        Ambil funding rate terkini.
+        Nilai positif → pasar terlalu long (potensi reversal ke bawah).
+        """
+        try:
+            data = self.client.funding_rate(symbol=symbol, limit=1)
+            return float(data[0]["fundingRate"]) if data else 0.0
+        except ClientError:
+            return 0.0
+
+    # ── Open Interest ──────────────────────────────────────────────────
+    def fetch_open_interest(self, symbol: str) -> float:
+        """
+        Total kontrak futures terbuka.
+        OI naik + harga turun → short accumulation → potensi short squeeze.
+        """
+        try:
+            data = self.client.open_interest(symbol=symbol)
+            return float(data.get("openInterest", 0.0))
+        except ClientError:
+            return 0.0
+
+    # ── Balance ───────────────────────────────────────────────────────
+    def fetch_balance(self) -> float:
+        """Ambil available balance USDT dari akun futures."""
+        try:
+            for asset in self.client.balance():
+                if asset["asset"] == "USDT":
+                    return float(asset["availableBalance"])
+            return 0.0
+        except ClientError as e:
+            log.error(f"❌ Gagal ambil balance: {e}")
+            return 0.0
+
+    # ── Posisi terbuka ────────────────────────────────────────────────
+    def fetch_open_positions(self, symbol: str) -> list[dict]:
+        """
+        Ambil posisi futures yang masih aktif (positionAmt != 0).
+        """
+        try:
+            all_pos = self.client.get_position_risk(symbol=symbol)
+            return [p for p in all_pos if float(p.get("positionAmt", 0)) != 0]
+        except ClientError:
+            return []
+
+    # ── Parser internal ───────────────────────────────────────────────
+    @staticmethod
+    def _parse_klines(raw: list) -> pd.DataFrame:
+        """
+        Konversi raw klines dari Binance ke DataFrame standard.
+        Kolom: open, high, low, close, volume — index: timestamp UTC.
+        """
+        df = pd.DataFrame(raw, columns=[
+            "ts", "open", "high", "low", "close", "volume",
+            "close_ts", "quote_vol", "trades",
+            "taker_buy_base", "taker_buy_quote", "ignore",
+        ])
+        df["ts"] = pd.to_datetime(df["ts"].astype("int64"), unit="ms", utc=True)
+        df.set_index("ts", inplace=True)
+        return df[["open", "high", "low", "close", "volume"]].astype(float)
+
+
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║                    5. FEATURE ENGINEERING                           ║
+# ╚══════════════════════════════════════════════════════════════════════╝
+
+class FeatureEngineer:
+    """
+    Pipeline pembuatan fitur untuk ML dan sinyal rule-based.
+
+    Urutan wajib diikuti:
+      VWAP → RSI/MACD/ATR → Price Action → Derivative Metrics → Label
+
+    JANGAN balik urutan atau tambah fitur setelah labeling
+    → bisa menyebabkan data leakage!
+    """
+
+    @staticmethod
+    def add_vwap(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        VWAP — indikator favorit institusi & trader profesional.
+        harga > VWAP = pasar dikontrol buyer (bias long).
+        harga < VWAP = pasar dikontrol seller (bias short).
+        """
+        df = df.copy()
+        cum_vp         = (df["close"] * df["volume"]).cumsum()
+        cum_v          = df["volume"].cumsum()
+        df["vwap"]     = cum_vp / cum_v
+        # Jarak relatif ke VWAP (feature penting buat ML)
+        df["vwap_dist_pct"] = (df["close"] - df["vwap"]) / df["vwap"]
+        return df
+
+    @staticmethod
+    def add_rsi_macd_atr(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        RSI   → deteksi kelelahan momentum & zona overbought/oversold
+        MACD  → konfirmasi arah perubahan tren (sinyal crossover kuat)
+        ATR   → ukuran volatilitas pasar → dipakai hitung SL/TP adaptif
+        """
+        df = df.copy()
+
+        rsi_ind         = RSIIndicator(df["close"], window=14)
+        df["rsi"]       = rsi_ind.rsi()
+
+        macd_ind        = MACD(df["close"])
+        df["macd"]      = macd_ind.macd()
+        df["macd_sig"]  = macd_ind.macd_signal()
+        df["macd_hist"] = macd_ind.macd_diff()
+
+        atr_ind         = AverageTrueRange(df["high"], df["low"], df["close"], window=14)
+        df["atr"]       = atr_ind.average_true_range()
+        df["atr_pct"]   = df["atr"] / df["close"]
+
+        return df
+
+    @staticmethod
+    def add_price_action(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Vektor price action mentah.
+        Berdasarkan riset, kelompok fitur ini paling tinggi feature importance
+        di model ML (>60% kontribusi prediktif).
+        """
+        df = df.copy()
+
+        # Return logaritmik multi-period
+        df["log_ret_1"]  = np.log(df["close"] / df["close"].shift(1))
+        df["log_ret_5"]  = np.log(df["close"] / df["close"].shift(5))
+        df["log_ret_20"] = np.log(df["close"] / df["close"].shift(20))
+
+        # Morfologi candle
+        df["body_size"]  = abs(df["close"] - df["open"]) / (df["open"] + 1e-8)
+        df["upper_wick"] = (df["high"] - df[["close","open"]].max(axis=1)) / (df["open"] + 1e-8)
+        df["lower_wick"] = (df[["close","open"]].min(axis=1) - df["low"])  / (df["open"] + 1e-8)
+
+        # Volatilitas rolling 20 candle
+        df["volatility_20"] = df["log_ret_1"].rolling(20).std()
+
+        # Posisi harga dalam range 20 candle (0 = di low, 1 = di high)
+        rh = df["high"].rolling(20).max()
+        rl = df["low"].rolling(20).min()
+        df["price_position"] = (df["close"] - rl) / (rh - rl + 1e-8)
+
+        # Volume relatif (Z-score)
+        vol_mean = df["volume"].rolling(20).mean()
+        vol_std  = df["volume"].rolling(20).std() + 1e-8
+        df["volume_zscore"] = (df["volume"] - vol_mean) / vol_std
+
+        return df
+
+    @staticmethod
+    def add_derivative_metrics(df: pd.DataFrame,
+                                funding_rate: float = 0.0,
+                                open_interest: float = 0.0) -> pd.DataFrame:
+        """
+        Masukkan data derivatif sebagai fitur konstan per batch.
+        Funding rate dan OI penting untuk deteksi risiko likuidasi massal
+        yang sering terjadi di pasar futures crypto.
+        """
+        df = df.copy()
+        df["funding_rate"]  = funding_rate
+        df["open_interest"] = open_interest
+        return df
+
+    @staticmethod
+    def add_labels(df: pd.DataFrame, horizon: int = 3,
+                   threshold: float = 0.003) -> pd.DataFrame:
+        """
+        Label target untuk training ML.
+        Cek return N candle ke depan:
+          +1  = LONG  jika return > +threshold
+          -1  = SHORT jika return < -threshold
+           0  = HOLD  jika di antara threshold (noise)
+        horizon=3 dan threshold=0.3% adalah parameter default.
+        """
+        df      = df.copy()
+        fut_ret = df["close"].shift(-horizon) / df["close"] - 1
+        df["label"] = 0
+        df.loc[fut_ret >  threshold, "label"] =  1
+        df.loc[fut_ret < -threshold, "label"] = -1
+        return df.dropna()
+
+    @classmethod
+    def build_features(cls, df: pd.DataFrame,
+                       funding_rate: float = 0.0,
+                       open_interest: float = 0.0) -> pd.DataFrame:
+        """
+        Jalankan pipeline lengkap.
+        Panggil ini sebelum training maupun inferensi real-time.
+        """
+        df = cls.add_vwap(df)
+        df = cls.add_rsi_macd_atr(df)
+        df = cls.add_price_action(df)
+        df = cls.add_derivative_metrics(df, funding_rate, open_interest)
+        return df
+
+    @staticmethod
+    def feature_columns() -> list[str]:
+        """Daftar nama kolom yang dipakai model ML (harus konsisten train/infer)."""
+        return [
+            "vwap_dist_pct",
+            "rsi", "macd", "macd_sig", "macd_hist", "atr_pct",
+            "log_ret_1", "log_ret_5", "log_ret_20",
+            "body_size", "upper_wick", "lower_wick",
+            "volatility_20", "price_position", "volume_zscore",
+            "funding_rate", "open_interest",
+        ]
+
+
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║                    6. MACHINE LEARNING MODEL                        ║
+# ╚══════════════════════════════════════════════════════════════════════╝
+
+class MLModel:
+    """
+    Ensemble classifier: RF + GB.
+    Kedua model di-average probabilitasnya → lebih robust dari satu model.
+
+    Keputusan training di 1H (bukan 15m):
+      Di bawah 1H, ML cenderung belajar noise acak, bukan pola prediktif.
+    """
+
+    def __init__(self):
+        self.rf  = self._build_rf()
+        self.gb  = self._build_gb()
+        self.cols = FeatureEngineer.feature_columns()
+        self.trained = False
+
+    @staticmethod
+    def _build_rf() -> Pipeline:
+        return Pipeline([
+            ("scaler", StandardScaler()),
+            ("clf", RandomForestClassifier(
+                n_estimators     = 300,
+                max_depth        = 8,
+                min_samples_leaf = 50,    # Tiap leaf min 50 sampel → cegah overfit
+                class_weight     = "balanced",
+                random_state     = 42,
+                n_jobs           = -1,
+            )),
+        ])
+
+    @staticmethod
+    def _build_gb() -> Pipeline:
+        return Pipeline([
+            ("scaler", StandardScaler()),
+            ("clf", GradientBoostingClassifier(
+                n_estimators  = 200,
+                learning_rate = 0.05,
+                max_depth     = 4,
+                subsample     = 0.8,   # 80% sampel per tree → regularisasi
+                random_state  = 42,
+            )),
+        ])
+
+    def train(self, df: pd.DataFrame):
+        """
+        Training dengan TimeSeriesSplit (5-fold).
+
+        PENTING: Jangan pernah ganti ke KFold biasa untuk data time series!
+        KFold random akan menyebabkan look-ahead bias karena
+        data masa depan bisa masuk ke set training.
+        """
+        df = FeatureEngineer.add_labels(df)
+        X  = df[self.cols].fillna(0)
+        y  = df["label"]
+
+        if len(X) < Config.MIN_TRAIN_ROWS:
+            raise ValueError(
+                f"❌ Data hanya {len(X):,} baris. "
+                f"Minimum {Config.MIN_TRAIN_ROWS:,} untuk model yang reliable!"
+            )
+
+        log.info(f"🧠 Training pada {len(X):,} sampel...")
+        tscv = TimeSeriesSplit(n_splits=5)
+
+        cv_rf = cross_val_score(self.rf, X, y, cv=tscv, scoring="f1_macro", n_jobs=-1)
+        self.rf.fit(X, y)
+        log.info(f"  RF  F1-macro: {cv_rf.mean():.3f} ± {cv_rf.std():.3f}")
+
+        cv_gb = cross_val_score(self.gb, X, y, cv=tscv, scoring="f1_macro")
+        self.gb.fit(X, y)
+        log.info(f"  GB  F1-macro: {cv_gb.mean():.3f} ± {cv_gb.std():.3f}")
+
+        log.info("\n" + classification_report(
+            y, self.rf.predict(X),
+            target_names=["SHORT", "HOLD", "LONG"]
+        ))
+
+        self.trained = True
+        self.save()
+
+    def predict(self, df: pd.DataFrame) -> dict:
+        """
+        Prediksi sinyal dari candle terbaru.
+        Ensemble: rata-rata probabilitas RF dan GB.
+
+        Return:
+            {
+              "signal"    : int   →  1=LONG, -1=SHORT, 0=HOLD
+              "confidence": float →  probabilitas kelas terpilih (0.0–1.0)
+            }
+        """
+        if not self.trained:
+            return {"signal": 0, "confidence": 0.0}
+
+        X = df[self.cols].fillna(0).tail(1)
+
+        p_rf  = self.rf.predict_proba(X)[0]
+        p_gb  = self.gb.predict_proba(X)[0]
+        proba = (p_rf + p_gb) / 2.0
+
+        classes     = self.rf.classes_
+        best_idx    = int(np.argmax(proba))
+        best_class  = int(classes[best_idx])
+        confidence  = float(proba[best_idx])
+
+        return {"signal": best_class, "confidence": confidence}
+
+    def save(self):
+        joblib.dump({"rf": self.rf, "gb": self.gb}, Config.MODEL_PATH)
+        log.info(f"💾 Model disimpan → {Config.MODEL_PATH}")
+
+    def load(self) -> bool:
+        if not Config.MODEL_PATH.exists():
+            return False
+        data     = joblib.load(Config.MODEL_PATH)
+        self.rf  = data["rf"]
+        self.gb  = data["gb"]
+        self.trained = True
+        log.info(f"📂 Model di-load dari {Config.MODEL_PATH}")
+        return True
+
+
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║                  7. SIGNAL ENGINE (RULE-BASED)                      ║
+# ╚══════════════════════════════════════════════════════════════════════╝
+
+class SignalEngine:
+    """
+    Konfluensi multi-kondisi sebelum mengambil posisi:
+      1. Bias VWAP (kontrol pembeli/penjual)
+      2. RSI keluar zona ekstrem  ATAU  MACD crossover
+      3. Konfirmasi tren 1H searah
+      4. ML confidence ≥ 60%
+
+    Semua 4 kondisi wajib terpenuhi → ini yang bikin bot selektif
+    dan menghasilkan win-rate lebih tinggi.
+    """
+
+    @staticmethod
+    def compute(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
+                ml_result: dict) -> dict:
+
+        last  = df_15m.iloc[-1]
+        prev  = df_15m.iloc[-2]
+        trend = df_1h.iloc[-1]
+
+        # Kondisi 1 — VWAP bias
+        vwap_bull = last["close"] > last["vwap"] * (1 + Config.VWAP_BAND_PCT)
+        vwap_bear = last["close"] < last["vwap"] * (1 - Config.VWAP_BAND_PCT)
+
+        # Kondisi 2 — RSI atau MACD
+        rsi_long  = last["rsi"] < Config.RSI_OVERSOLD
+        rsi_short = last["rsi"] > Config.RSI_OVERBOUGHT
+        macd_up   = (prev["macd"] <= prev["macd_sig"]) and (last["macd"] > last["macd_sig"])
+        macd_down = (prev["macd"] >= prev["macd_sig"]) and (last["macd"] < last["macd_sig"])
+
+        # Kondisi 3 — Tren 1H
+        trend_up   = trend["close"] > trend["vwap"]
+        trend_down = trend["close"] < trend["vwap"]
+
+        # Kondisi 4 — ML gate
+        ml_long  = ml_result["signal"] ==  1 and ml_result["confidence"] >= Config.ML_CONFIDENCE
+        ml_short = ml_result["signal"] == -1 and ml_result["confidence"] >= Config.ML_CONFIDENCE
+
+        # Final decision (semua harus True)
+        go_long  = vwap_bull and (rsi_long  or macd_up)   and trend_up   and ml_long
+        go_short = vwap_bear and (rsi_short or macd_down) and trend_down and ml_short
+
+        action = "LONG" if go_long else ("SHORT" if go_short else "HOLD")
+
+        log.info(
+            f"📊 Signal={action:5s} | "
+            f"VWAP={'↑' if vwap_bull else '↓' if vwap_bear else '–'} | "
+            f"RSI={last['rsi']:.1f} | "
+            f"MACD_h={last['macd_hist']:.5f} | "
+            f"ML={ml_result['signal']}({ml_result['confidence']:.0%}) | "
+            f"ATR={last['atr']:.2f}"
+        )
+
+        return {
+            "action"   : action,
+            "close"    : float(last["close"]),
+            "atr"      : float(last["atr"]),
+            "ml_conf"  : float(ml_result["confidence"]),
+            "signal_ts": str(df_15m.index[-1]),
+        }
+
+
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║            8. ORDER MANAGER (Binance + Supabase)                    ║
+# ╚══════════════════════════════════════════════════════════════════════╝
+
+class OrderManager:
+    """
+    Eksekusi order dan pencatatan transaksi ke Supabase.
+
+    Flow:
+      place_order()
+        ├── Cek batas posisi (MAX_OPEN_TRADES)
+        ├── Hitung size ATR-based
+        ├── Market order → Binance
+        ├── Stop-loss order → Binance
+        ├── Take-profit order → Binance
+        └── insert_trade() → Supabase (status=OPEN)
+    """
+
+    def __init__(self, fetcher: DataFetcher, db: SupabaseManager):
+        self.fetcher = fetcher
+        self.client  = fetcher.client
+        self.db      = db
+
+    def _calc_size(self, price: float, atr: float, balance: float) -> float:
+        """
+        ATR-based position sizing:
+          risiko_dollar = balance × risk_pct
+          sl_distance   = ATR_SL_MULT × ATR
+          size          = risiko_dollar / sl_distance / price
+
+        Ini memastikan loss maksimal per trade = 1% modal,
+        berapapun volatilitas pasar saat itu.
+        """
+        risk     = balance * Config.RISK_PER_TRADE
+        sl_dist  = Config.ATR_SL_MULT * atr
+        return round(risk / sl_dist / price, 4)
+
+    def place_order(self, signal: dict) -> dict | None:
+        if signal["action"] == "HOLD":
+            return None
+
+        open_pos = self.fetcher.fetch_open_positions(Config.SYMBOL)
+        if len(open_pos) >= Config.MAX_OPEN_TRADES:
+            log.warning(f"⚠️  Sudah {len(open_pos)} posisi terbuka — skip entry baru")
+            return None
+
+        balance = self.fetcher.fetch_balance()
+        if balance <= 0:
+            log.error("❌ Balance nol atau gagal diambil")
+            return None
+
+        side       = "BUY"  if signal["action"] == "LONG"  else "SELL"
+        close_side = "SELL" if side == "BUY" else "BUY"
+        price      = signal["close"]
+        atr        = signal["atr"]
+        size       = self._calc_size(price, atr, balance)
+
+        if size <= 0:
+            log.warning("⚠️  Kalkulasi size = 0, skip")
+            return None
+
+        sl = round(price - Config.ATR_SL_MULT * atr if side == "BUY" else price + Config.ATR_SL_MULT * atr, 2)
+        tp = round(price + Config.ATR_TP_MULT * atr if side == "BUY" else price - Config.ATR_TP_MULT * atr, 2)
+
+        try:
+            # Set leverage
+            self.client.change_leverage(symbol=Config.SYMBOL, leverage=Config.MAX_LEVERAGE)
+
+            # Market order utama
+            order    = self.client.new_order(
+                symbol   = Config.SYMBOL,
+                side     = side,
+                type     = "MARKET",
+                quantity = size,
+            )
+            order_id = str(order["orderId"])
+
+            # Stop-Loss (stop market, closePosition)
+            self.client.new_order(
+                symbol        = Config.SYMBOL,
+                side          = close_side,
+                type          = "STOP_MARKET",
+                stopPrice     = sl,
+                closePosition = "true",
+            )
+
+            # Take-Profit (take profit market, closePosition)
+            self.client.new_order(
+                symbol        = Config.SYMBOL,
+                side          = close_side,
+                type          = "TAKE_PROFIT_MARKET",
+                stopPrice     = tp,
+                closePosition = "true",
+            )
+
+            log.info(
+                f"✅ {signal['action']:5s} | "
+                f"size={size} | entry≈{price:.2f} | "
+                f"SL={sl} | TP={tp} | ID={order_id}"
+            )
+
+            # Catat ke Supabase
+            self.db.insert_trade({
+                "symbol"        : Config.SYMBOL,
+                "side"          : signal["action"],
+                "entry_price"   : round(price, 4),
+                "exit_price"    : None,
+                "sl_price"      : sl,
+                "tp_price"      : tp,
+                "size"          : size,
+                "pnl"           : None,
+                "pnl_pct"       : None,
+                "status"        : "OPEN",
+                "ml_confidence" : round(signal["ml_conf"], 4),
+                "atr"           : round(atr, 4),
+                "order_id"      : order_id,
+                "signal_ts"     : signal["signal_ts"],
+            })
+
+            return order
+
+        except ClientError as e:
+            log.error(f"❌ Order gagal — Binance ClientError: {e}")
+            return None
+
+
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║           9. POSITION MONITOR (Auto-sync ke Supabase)               ║
+# ╚══════════════════════════════════════════════════════════════════════╝
+
+class PositionMonitor:
+    """
+    Deteksi posisi yang sudah ditutup (kena SL atau TP) di Binance,
+    lalu update status dan PnL di Supabase secara otomatis.
+
+    Cara kerja:
+      1. Ambil daftar trade OPEN dari Supabase
+      2. Cek posisi aktif di Binance
+      3. Kalau order_id tidak ada di posisi aktif → sudah close
+      4. Ambil realized PnL dari income history Binance
+      5. Update Supabase dengan WIN/LOSS + PnL + exit price
+    """
+
+    def __init__(self, fetcher: DataFetcher, db: SupabaseManager):
+        self.fetcher = fetcher
+        self.db      = db
+
+    def sync(self):
+        """Sinkronisasi status posisi Binance → Supabase."""
+        open_trades = self.db.get_open_trades()
+        if not open_trades:
+            return  # Tidak ada yang perlu di-sync
+
+        # Kumpulkan order_id posisi yang masih aktif di Binance
+        active_pos = self.fetcher.fetch_open_positions(Config.SYMBOL)
+        active_ids = {str(p.get("orderId", "")) for p in active_pos}
+
+        for trade in open_trades:
+            order_id    = str(trade.get("order_id", ""))
+            trade_id    = trade["id"]
+            entry_price = float(trade["entry_price"])
+            size        = float(trade.get("size", 1))
+            side        = trade["side"]
+
+            # Kalau tidak ada di active positions → posisi sudah close
+            if order_id not in active_ids:
+                pnl, exit_px = self._get_realized_pnl(entry_price, size, side)
+                pnl_pct      = pnl / (entry_price * size) if (entry_price * size) > 0 else 0.0
+                status       = "WIN" if pnl > 0 else "LOSS"
+                self.db.close_trade(trade_id, exit_px, pnl, pnl_pct, status)
+
+    def _get_realized_pnl(self, entry: float, size: float, side: str) -> tuple[float, float]:
+        """
+        Ambil realized PnL dari income history Binance.
+        Kalau gagal, estimasi dari harga entry (worst case).
+        """
+        try:
+            income = self.fetcher.client.get_income_history(
+                symbol     = Config.SYMBOL,
+                incomeType = "REALIZED_PNL",
+                limit      = 5,
+            )
+            if income:
+                pnl = float(income[0]["income"])
+                # Estimasi exit price dari PnL yang dilaporkan
+                if size > 0 and entry > 0:
+                    exit_px = round(
+                        entry + pnl / size if side == "LONG" else entry - pnl / size,
+                        4
+                    )
+                else:
+                    exit_px = entry
+                return pnl, exit_px
+        except ClientError:
+            pass
+        return 0.0, entry
+
+
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║                   10. TRADING BOT UTAMA                             ║
+# ╚══════════════════════════════════════════════════════════════════════╝
+
+class TradingBot:
+    """
+    Orkestrator utama yang nyatuin semua komponen:
+
+    DataFetcher
+      ↓
+    FeatureEngineer
+      ↓
+    MLModel  ────────────────┐
+      ↓                      ↓
+    SignalEngine ← (rule-based + ML gate)
+      ↓
+    OrderManager → Binance + Supabase
+      ↓
+    PositionMonitor → sync close ke Supabase
+      ↓
+    SupabaseManager.get_stats() → tampilkan winrate
+    """
+
+    def __init__(self):
+        self.client  = create_binance_client()
+        self.db      = SupabaseManager()
+        self.fetcher = DataFetcher(self.client)
+        self.ml      = MLModel()
+        self.orders  = OrderManager(self.fetcher, self.db)
+        self.monitor = PositionMonitor(self.fetcher, self.db)
+        self._cycle  = 0
+
+    def initialize(self):
+        """
+        Load model kalau ada, kalau belum → training dari data historis.
+        Setelah siap, tampilkan statistik terakhir dari Supabase.
+        """
+        if not self.ml.load():
+            log.info("🧠 Belum ada model tersimpan. Mulai training...")
+            df_raw  = self.fetcher.fetch_ohlcv_bulk(
+                Config.SYMBOL, Config.TF_ML, Config.TRAIN_YEARS
+            )
+            fr = self.fetcher.fetch_funding_rate(Config.SYMBOL)
+            oi = self.fetcher.fetch_open_interest(Config.SYMBOL)
+            df = FeatureEngineer.build_features(df_raw, fr, oi)
+            self.ml.train(df)
         else:
-            print("💤 Gate 2 Gagal — AI belum yakin...")
-    print("="*65)
+            log.info("✅ Model ML siap.")
 
-# ==========================================
-# 8. MAIN LOOP — SMART DUAL LOOP
-# ==========================================
-# Arsitektur:
-#   Loop CEPAT (setiap LOOP_DELAY detik):
-#     → Hanya fetch harga terkini (1 request ringan)
-#     → Kalau ada posisi: update trailing SL, cek SL kena
-#     → Kalau tidak ada posisi: cek apakah candle baru terbentuk
-#
-#   Loop LAMBAT (hanya saat candle baru):
-#     → Fetch klines 500 candle (1 request berat)
-#     → Hitung semua indikator (CPU intensive)
-#     → Jalankan Gate 1, 2, 3
-#     → Eksekusi order kalau sinyal valid
-#
-# Efisiensi: di 1m, klines berat hanya di-fetch 1x per menit
-# vs sebelumnya 30x per menit (setiap 2 detik)
+        # Tampilkan statistik awal dari database
+        self.db.get_stats()
 
-while True:
-    try:
-        # ── Fetch harga terkini — ringan, selalu jalan ──────────────────────
-        harga_skrg = ambil_harga_cepat()
-        if harga_skrg == 0:
-            time.sleep(LOOP_DELAY)
-            continue
+    def run_once(self):
+        """
+        Satu siklus lengkap setiap 15 menit:
+          sync → fetch → feature → predict → signal → order
+        """
+        self._cycle += 1
+        log.info(f"{'─'*60}")
+        log.info(f"🔁 Siklus #{self._cycle} — {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}")
 
-        # ── MODE PELACAKAN: ada posisi terbuka ──────────────────────────────
-        if sedang_ada_posisi:
-            loop_pelacakan(harga_skrg)
-            time.sleep(LOOP_DELAY)
-            continue
+        try:
+            # 1. Sinkron posisi yang sudah close di Binance ke Supabase
+            self.monitor.sync()
 
-        # ── MODE RADAR: cari sinyal, hanya saat candle baru ─────────────────
-        if candle_baru_terbentuk():
-            df = ambil_data_live()
-            if df is not None:
-                _df_cache  = df
-                harga_skrg = df.iloc[-1]['close']  # pakai close candle, bukan ticker
-                loop_radar(df, harga_skrg)
-        else:
-            # Candle belum baru — tampilkan status tunggu ringkas
-            waktu_skrg  = datetime.now().strftime('%H:%M:%S')
-            print(f"⏳ [{waktu_skrg}] Menunggu candle baru... | Live: ${harga_skrg:.2f}", end='\r')
+            # 2. Ambil data OHLCV terbaru
+            df_15m = self.fetcher.fetch_ohlcv(Config.SYMBOL, Config.TF_SIGNAL, limit=300)
+            df_1h  = self.fetcher.fetch_ohlcv(Config.SYMBOL, Config.TF_TREND,  limit=100)
+            fr     = self.fetcher.fetch_funding_rate(Config.SYMBOL)
+            oi     = self.fetcher.fetch_open_interest(Config.SYMBOL)
 
-        time.sleep(LOOP_DELAY)
+            # 3. Feature engineering
+            df_15m = FeatureEngineer.build_features(df_15m, fr, oi)
+            df_1h  = FeatureEngineer.build_features(df_1h,  fr, oi)
 
-    except Exception as e:
-        print(f"\n⚠️ Error Utama: {e}")
-        time.sleep(5)
+            # 4. Prediksi ML
+            ml_result = self.ml.predict(df_15m)
+
+            # 5. Hitung sinyal akhir
+            signal = SignalEngine.compute(df_15m, df_1h, ml_result)
+
+            # 6. Eksekusi order (kalau tidak HOLD)
+            if signal["action"] != "HOLD":
+                self.orders.place_order(signal)
+            else:
+                log.info("💤 HOLD — tidak ada kondisi entry terpenuhi")
+
+            # 7. Tampilkan stats setiap 10 siklus
+            if self._cycle % 10 == 0:
+                self.db.get_stats()
+
+        except Exception as e:
+            log.error(f"❌ Error di siklus #{self._cycle}: {e}", exc_info=True)
+
+    def start(self):
+        log.info("🚀 TradingBot dimulai!")
+        self.initialize()
+
+        # Langsung jalankan satu siklus pertama
+        self.run_once()
+
+        # Jadwalkan tiap 15 menit
+        schedule.every(15).minutes.do(self.run_once)
+        log.info("⏰ Scheduler aktif — eksekusi tiap 15 menit")
+
+        while True:
+            schedule.run_pending()
+            time.sleep(10)
+
+
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║                         ENTRY POINT                                 ║
+# ╚══════════════════════════════════════════════════════════════════════╝
+
+if __name__ == "__main__":
+    bot = TradingBot()
+    bot.start()

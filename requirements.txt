@@ -1,7 +1,11 @@
-binance-futures-connector
-pandas
-pandas-ta
-scikit-learn
-python-dotenv
-requests
-supabase
+# Trading Bot — Dependencies
+# Install: pip install -r requirements.txt
+
+binance-futures-connector>=4.0.0   # Binance official SDK (UM Futures)
+supabase>=2.0.0                    # Supabase Python client
+pandas>=2.0.0
+numpy>=1.24.0
+ta>=0.11.0                         # Technical Analysis (RSI, MACD, ATR)
+scikit-learn>=1.4.0                # Random Forest & Gradient Boosting
+joblib>=1.3.0                      # Simpan/load model ke disk
+schedule>=1.2.0                    # Scheduler ringan non-blocking

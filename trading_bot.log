@@ -1,0 +1,29 @@
+2026-04-04 09:18:18,638 | INFO | ✅ Binance Futures (TESTNET ⚠️) — terhubung
+2026-04-04 09:18:18,904 | INFO | ✅ Supabase — terhubung
+2026-04-04 09:18:18,909 | INFO | 🚀 TradingBot dimulai!
+2026-04-04 09:18:18,910 | INFO | 🧠 Belum ada model tersimpan. Mulai training...
+2026-04-04 09:18:18,910 | INFO | 📥 Bulk fetch: BTCUSDT 1h — 3 tahun terakhir...
+2026-04-04 09:18:30,203 | INFO | ✅ Bulk fetch selesai — 26,252 baris
+2026-04-04 09:18:30,682 | INFO | 🧠 Training pada 26,219 sampel...
+2026-04-04 09:18:39,958 | INFO |   RF  F1-macro: 0.440 ± 0.030
+2026-04-04 09:21:55,259 | INFO |   GB  F1-macro: 0.404 ± 0.037
+2026-04-04 09:21:55,411 | INFO | 
+              precision    recall  f1-score   support
+
+       SHORT       0.48      0.52      0.50      7780
+        HOLD       0.56      0.50      0.53     10233
+        LONG       0.50      0.53      0.52      8206
+
+    accuracy                           0.52     26219
+   macro avg       0.52      0.52      0.52     26219
+weighted avg       0.52      0.52      0.52     26219
+
+2026-04-04 09:21:55,652 | INFO | 💾 Model disimpan → model_trading.pkl
+2026-04-04 09:21:56,884 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 09:21:56,965 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 09:21:56,966 | INFO | ────────────────────────────────────────────────────────────
+2026-04-04 09:21:56,967 | INFO | 🔁 Siklus #1 — 2026-04-04 02:21 UTC
+2026-04-04 09:21:57,114 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 09:21:57,776 | INFO | 📊 Signal=HOLD  | VWAP=↓ | RSI=43.5 | MACD_h=-10.06779 | ML=0(57%) | ATR=48.03
+2026-04-04 09:21:57,778 | INFO | 💤 HOLD — tidak ada kondisi entry terpenuhi
+2026-04-04 09:21:57,779 | INFO | ⏰ Scheduler aktif — eksekusi tiap 15 menit
