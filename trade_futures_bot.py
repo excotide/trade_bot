@@ -100,8 +100,8 @@ class Config:
 
     load_dotenv()   # Baca file .env otomatis dari direktori yang sama
 
-    # ── Google Gemini API ─────────────────────────────────────────────
-    GEMINI_API_KEY     = os.getenv("GEMINI_API_KEY")       # dari aistudio.google.com/apikey
+    # ── OpenRouter API ────────────────────────────────────────────────
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")   # dari openrouter.ai/settings/keys
 
     # ── Binance Futures ───────────────────────────────────────────────
     BINANCE_API_KEY    = os.getenv("BINANCE_DEMO_API_KEY")
@@ -769,34 +769,32 @@ class MLModel:
 
 
 # ╔══════════════════════════════════════════════════════════════════════╗
-# ║              7. AI DECISION ENGINE (Gemini API — Free Tier)         ║
+# ║              7. AI DECISION ENGINE (OpenRouter — gpt-oss-120b)      ║
 # ╚══════════════════════════════════════════════════════════════════════╝
 
 class AIDecisionEngine:
     """
-    Keputusan trading dari Google Gemini Flash (GRATIS, 1.500 req/hari).
+    Keputusan trading dari OpenRouter API (model: openai/gpt-oss-120b).
 
     Semua data teknikal (VWAP, RSI, MACD, ATR, price action, funding rate,
-    open interest, dan prediksi ML) dikirim ke Gemini sebagai konteks.
-    Gemini membaca seluruh gambaran pasar dan output-nya berupa JSON:
+    open interest, dan prediksi ML) dikirim sebagai konteks.
+    Model membaca seluruh gambaran pasar dan output-nya berupa JSON:
       {
         "action"     : "LONG" | "SHORT" | "HOLD",
         "confidence" : float (0.0 – 1.0),
         "reasoning"  : "penjelasan singkat keputusan"
       }
 
-    Free tier Gemini Flash:
-      - 1.500 request/hari  (bot pakai ~96/hari → sangat aman)
-      - 15 request/menit
-      - Daftar API key gratis: aistudio.google.com/apikey
+    OpenRouter:
+      - Akses ke ratusan model via satu endpoint
+      - $1 kredit gratis saat daftar
+      - Daftar API key: openrouter.ai/settings/keys
+      - Ganti model di Config.MODEL sesuai kebutuhan
     """
 
-    # Gemini REST endpoint — generateContent untuk gemini-1.5-flash
-    GEMINI_API_URL = (
-        "https://generativelanguage.googleapis.com/v1beta/models"
-        "/gemini-2.5-flash:generateContent"
-    )
-    MODEL = "gemini-2.5-flash"
+    # OpenRouter endpoint — OpenAI-compatible format
+    OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+    MODEL              = "openai/gpt-oss-120b"
 
     # System instruction — dikirim sebagai systemInstruction di Gemini API
     SYSTEM_PROMPT = """Kamu adalah analis trading algoritmik di Binance Futures.
@@ -807,7 +805,9 @@ Aturan: action hanya LONG/SHORT/HOLD, confidence 0.0-1.0, reasoning maksimal 10 
 
     def __init__(self, api_key: str):
         self.api_key          = api_key
-        self._last_reasoning  = ""   # Simpan reasoning terakhir untuk logging
+        self._last_reasoning  = ""
+        self._site_url        = "https://github.com/trading-bot"   # Opsional: untuk OpenRouter analytics
+        self._app_name        = "AlgoTradingBot"
 
     @staticmethod
     def _build_snapshot(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
@@ -917,18 +917,15 @@ Aturan: action hanya LONG/SHORT/HOLD, confidence 0.0-1.0, reasoning maksimal 10 
             },
         }
 
-    def _call_gemini(self, snapshot: dict) -> dict:
+    def _call_openrouter(self, snapshot: dict) -> dict:
         """
-        Kirim snapshot pasar ke Gemini API dan parse responsenya.
-        Retry otomatis 2x jika gagal (network hiccup, rate limit, dll).
-
-        Gemini API pakai query param ?key=API_KEY (bukan header x-api-key).
+        Kirim snapshot ke OpenRouter API (OpenAI-compatible).
+        Auth: Bearer token di header Authorization.
         Return: {"action": str, "confidence": float, "reasoning": str}
         """
         import json
         import urllib.request
         import urllib.error
-        import urllib.parse
 
         user_message = (
             "Analisis data pasar berikut dan buat keputusan trading:\n\n"
@@ -936,55 +933,49 @@ Aturan: action hanya LONG/SHORT/HOLD, confidence 0.0-1.0, reasoning maksimal 10 
             "Berikan keputusan trading dalam format JSON yang diminta."
         )
 
-        # Gemini API: systemInstruction terpisah dari contents
         payload = json.dumps({
-            "systemInstruction": {
-                "parts": [{"text": self.SYSTEM_PROMPT}]
-            },
-            "contents": [
-                {"role": "user", "parts": [{"text": user_message}]}
+            "model"      : self.MODEL,
+            "messages"   : [
+                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "user",   "content": user_message},
             ],
-            "generationConfig": {
-                "maxOutputTokens": 1024,
-                "temperature"    : 0.1,
-            },
+            "max_tokens" : 256,
+            "temperature": 0.1,
         }).encode("utf-8")
 
-        # API key dimasukkan sebagai query parameter (bukan header)
-        url     = f"{self.GEMINI_API_URL}?key={urllib.parse.quote(self.api_key)}"
-        headers = {"Content-Type": "application/json"}
+        headers = {
+            "Content-Type" : "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+            "HTTP-Referer" : self._site_url,   # Opsional, untuk OpenRouter dashboard
+            "X-Title"      : self._app_name,   # Opsional, label di OpenRouter
+        }
 
-        for attempt in range(1, 4):   # Max 3 percobaan
+        for attempt in range(1, 4):
             try:
-                req  = urllib.request.Request(url, data=payload, headers=headers)
+                req = urllib.request.Request(
+                    self.OPENROUTER_API_URL, data=payload, headers=headers
+                )
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     body = json.loads(resp.read().decode("utf-8"))
 
-                log.debug(f"Gemini raw: {str(body)[:400]}")
+                log.debug(f"OpenRouter raw: {str(body)[:400]}")
 
-                # Ekstrak teks — robust terhadap variasi struktur Gemini 2.5
-                raw_text = ""
-                try:
-                    parts = body["candidates"][0]["content"]["parts"]
-                    # Ambil semua part bertipe "text", skip part bertipe "thought"
-                    texts = [p["text"] for p in parts if p.get("text") and not p.get("thought")]
-                    raw_text = " ".join(texts).strip()
-                except (KeyError, IndexError):
-                    pass
+                # OpenAI-compatible: choices[0].message.content
+                raw_text = body["choices"][0]["message"]["content"].strip()
 
                 if not raw_text:
-                    log.warning(f"⚠️  Gemini response kosong, body={str(body)[:200]}")
+                    log.warning(f"⚠️  OpenRouter response kosong (attempt {attempt}/3)")
                     time.sleep(3 * attempt)
                     continue
 
-                # Strip markdown fence kalau ada (```json ... ```)
+                # Strip markdown fence kalau ada
                 if "```" in raw_text:
                     raw_text = raw_text.split("```")[1]
                     if raw_text.startswith("json"):
                         raw_text = raw_text[4:]
                     raw_text = raw_text.strip()
 
-                # Strip karakter non-JSON di awal/akhir
+                # Isolasi blok JSON murni
                 start = raw_text.find("{")
                 end   = raw_text.rfind("}") + 1
                 if start != -1 and end > start:
@@ -992,7 +983,6 @@ Aturan: action hanya LONG/SHORT/HOLD, confidence 0.0-1.0, reasoning maksimal 10 
 
                 decision = json.loads(raw_text)
 
-                # Validasi struktur JSON
                 action = decision.get("action", "HOLD").upper()
                 if action not in ("LONG", "SHORT", "HOLD"):
                     action = "HOLD"
@@ -1004,34 +994,29 @@ Aturan: action hanya LONG/SHORT/HOLD, confidence 0.0-1.0, reasoning maksimal 10 
                 }
 
             except urllib.error.HTTPError as e:
-                # Baca body error dari Anthropic supaya pesan spesifik kelihatan di log
                 try:
                     err_body = json.loads(e.read().decode("utf-8"))
                     err_msg  = err_body.get("error", {}).get("message", str(e))
                 except Exception:
-                    err_msg  = str(e)
-                log.warning(
-                    f"⚠️  Gemini API HTTP {e.code} (attempt {attempt}/3): {err_msg}"
-                )
+                    err_msg = str(e)
+                log.warning(f"⚠️  OpenRouter HTTP {e.code} (attempt {attempt}/3): {err_msg}")
                 if e.code == 429:
                     time.sleep(10 * attempt)
                 elif e.code in (400, 401, 403):
-                    # 400/401/403 tidak akan berhasil di-retry → langsung keluar
-                    log.error(f"❌ Gemini API error fatal ({e.code}) — tidak di-retry.")
+                    log.error(f"❌ OpenRouter error fatal ({e.code}) — tidak di-retry.")
                     break
                 else:
                     time.sleep(3 * attempt)
 
             except (json.JSONDecodeError, KeyError) as e:
-                log.warning(f"⚠️  Gagal parse response Gemini (attempt {attempt}/3): {e}")
+                log.warning(f"⚠️  Gagal parse response OpenRouter (attempt {attempt}/3): {e}")
                 time.sleep(3)
 
             except Exception as e:
-                log.warning(f"⚠️  Error Gemini API (attempt {attempt}/3): {e}")
+                log.warning(f"⚠️  Error OpenRouter API (attempt {attempt}/3): {e}")
                 time.sleep(3 * attempt)
 
-        # Semua retry gagal → fallback ke HOLD yang aman
-        log.error("❌ Gemini API gagal setelah 3 percobaan. Fallback ke HOLD.")
+        log.error("❌ OpenRouter gagal setelah 3 percobaan. Fallback ke HOLD.")
         return {"action": "HOLD", "confidence": 0.0, "reasoning": "API tidak tersedia"}
 
     def compute(self, df_15m: pd.DataFrame, df_1h: pd.DataFrame,
@@ -1039,14 +1024,14 @@ Aturan: action hanya LONG/SHORT/HOLD, confidence 0.0-1.0, reasoning maksimal 10 
                 balance: float, funding_rate: float,
                 open_interest: float) -> dict:
         """
-        Entry point utama — bangun snapshot, kirim ke Gemini, return keputusan.
+        Entry point utama — bangun snapshot, kirim ke OpenRouter, return keputusan.
         """
         snapshot = self._build_snapshot(
             df_15m, df_1h, ml_result, open_positions,
             balance, funding_rate, open_interest
         )
 
-        decision = self._call_gemini(snapshot)
+        decision = self._call_openrouter(snapshot)
         self._last_reasoning = decision["reasoning"]
 
         log.info(
@@ -1535,7 +1520,7 @@ class TradingBot:
         self.ml       = MLModel()
         self.orders   = OrderManager(self.fetcher, self.db)
         self.monitor  = PositionMonitor(self.fetcher, self.db)
-        self.ai       = AIDecisionEngine(Config.GEMINI_API_KEY)
+        self.ai       = AIDecisionEngine(Config.OPENROUTER_API_KEY)
         self._cycle   = 0
         # Daftarkan handler shutdown — harus setelah fetcher & db siap
         self.shutdown = GracefulShutdown(self.fetcher, self.db)
