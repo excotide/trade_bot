@@ -80,3 +80,323 @@ weighted avg       0.52      0.52      0.52     26219
 2026-04-04 10:00:39,438 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
 2026-04-04 10:00:39,519 | INFO | 📊 Belum ada trade yang selesai.
 2026-04-04 10:00:39,520 | INFO | ✅ Semua posisi berhasil ditutup. Bot berhenti dengan aman.
+2026-04-04 17:36:48,902 | INFO | ✅ Binance Futures (TESTNET ⚠️) — terhubung
+2026-04-04 17:36:50,686 | INFO | ✅ Supabase — terhubung
+2026-04-04 17:36:50,690 | INFO | 🛡️  GracefulShutdown terdaftar (SIGINT / SIGTERM / SIGHUP / atexit)
+2026-04-04 17:36:50,690 | INFO | 🚀 TradingBot dimulai!
+2026-04-04 17:36:51,155 | INFO | 📂 Model di-load dari model_trading.pkl
+2026-04-04 17:36:51,157 | INFO | ✅ Model ML siap.
+2026-04-04 17:36:52,480 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 17:36:52,481 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 17:36:52,481 | INFO | ────────────────────────────────────────────────────────────
+2026-04-04 17:36:52,482 | INFO | 🔁 Siklus #1 — 2026-04-04 10:36 UTC
+2026-04-04 17:36:52,616 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 17:36:53,834 | WARNING | ⚠️  Error Claude API (attempt 1/3): expected string or bytes-like object, got 'NoneType'
+2026-04-04 17:36:56,835 | WARNING | ⚠️  Error Claude API (attempt 2/3): expected string or bytes-like object, got 'NoneType'
+2026-04-04 17:37:02,837 | WARNING | ⚠️  Error Claude API (attempt 3/3): expected string or bytes-like object, got 'NoneType'
+2026-04-04 17:37:04,694 | WARNING | 
+⚠️  Sinyal SIGINT diterima — memulai graceful shutdown...
+2026-04-04 17:37:04,695 | INFO | ============================================================
+2026-04-04 17:37:04,695 | INFO | 🔴 GRACEFUL SHUTDOWN — Menutup semua posisi terbuka...
+2026-04-04 17:37:04,696 | INFO | ============================================================
+2026-04-04 17:37:04,828 | INFO | ℹ️  Tidak ada posisi terbuka — tidak ada yang perlu ditutup.
+2026-04-04 17:37:05,089 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 17:37:05,224 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 17:37:05,312 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 17:37:05,313 | INFO | ✅ Semua posisi berhasil ditutup. Bot berhenti dengan aman.
+2026-04-04 17:40:46,406 | INFO | ✅ Binance Futures (TESTNET ⚠️) — terhubung
+2026-04-04 17:40:47,028 | INFO | ✅ Supabase — terhubung
+2026-04-04 17:40:47,028 | INFO | 🛡️  GracefulShutdown terdaftar (SIGINT / SIGTERM / SIGHUP / atexit)
+2026-04-04 17:40:47,028 | INFO | 🚀 TradingBot dimulai!
+2026-04-04 17:40:47,148 | INFO | 📂 Model di-load dari model_trading.pkl
+2026-04-04 17:40:47,149 | INFO | ✅ Model ML siap.
+2026-04-04 17:40:47,931 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 17:40:47,933 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 17:40:47,933 | INFO | ────────────────────────────────────────────────────────────
+2026-04-04 17:40:47,935 | INFO | 🔁 Siklus #1 — 2026-04-04 10:40 UTC
+2026-04-04 17:40:48,077 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 17:40:49,618 | WARNING | ⚠️  Claude API HTTP error (attempt 1/3): 400 Bad Request
+2026-04-04 17:40:53,108 | WARNING | ⚠️  Claude API HTTP error (attempt 2/3): 400 Bad Request
+2026-04-04 17:40:59,520 | WARNING | ⚠️  Claude API HTTP error (attempt 3/3): 400 Bad Request
+2026-04-04 17:41:08,522 | ERROR | ❌ Claude API gagal setelah 3 percobaan. Fallback ke HOLD.
+2026-04-04 17:41:08,524 | INFO | 🤖 AI Decision=HOLD  | confidence=0% | ML=0(56%) | RSI=48.5 | ATR=32.87
+2026-04-04 17:41:08,524 | INFO | 💬 Reasoning: API tidak tersedia
+2026-04-04 17:41:08,525 | INFO | 💤 HOLD — AI memutuskan tidak ada entry yang layak
+2026-04-04 17:41:08,525 | INFO | ⏰ Scheduler aktif — eksekusi tiap 15 menit
+2026-04-04 17:41:18,651 | WARNING | 
+⚠️  Sinyal SIGINT diterima — memulai graceful shutdown...
+2026-04-04 17:41:18,651 | INFO | ============================================================
+2026-04-04 17:41:18,653 | INFO | 🔴 GRACEFUL SHUTDOWN — Menutup semua posisi terbuka...
+2026-04-04 17:41:18,653 | INFO | ============================================================
+2026-04-04 17:41:18,793 | INFO | ℹ️  Tidak ada posisi terbuka — tidak ada yang perlu ditutup.
+2026-04-04 17:41:19,069 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 17:41:19,207 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 17:41:19,291 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 17:41:19,291 | INFO | ✅ Semua posisi berhasil ditutup. Bot berhenti dengan aman.
+2026-04-04 17:43:28,062 | INFO | ✅ Binance Futures (TESTNET ⚠️) — terhubung
+2026-04-04 17:43:28,715 | INFO | ✅ Supabase — terhubung
+2026-04-04 17:43:28,728 | INFO | 🛡️  GracefulShutdown terdaftar (SIGINT / SIGTERM / SIGHUP / atexit)
+2026-04-04 17:43:28,732 | INFO | 🚀 TradingBot dimulai!
+2026-04-04 17:43:28,843 | INFO | 📂 Model di-load dari model_trading.pkl
+2026-04-04 17:43:28,844 | INFO | ✅ Model ML siap.
+2026-04-04 17:43:29,676 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 17:43:29,678 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 17:43:29,678 | INFO | ────────────────────────────────────────────────────────────
+2026-04-04 17:43:29,679 | INFO | 🔁 Siklus #1 — 2026-04-04 10:43 UTC
+2026-04-04 17:43:29,816 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 17:43:31,947 | WARNING | ⚠️  Claude API HTTP error (attempt 1/3): 400 Bad Request
+2026-04-04 17:43:35,291 | WARNING | ⚠️  Claude API HTTP error (attempt 2/3): 400 Bad Request
+2026-04-04 17:43:37,918 | WARNING | 
+⚠️  Sinyal SIGINT diterima — memulai graceful shutdown...
+2026-04-04 17:43:37,918 | INFO | ============================================================
+2026-04-04 17:43:37,919 | INFO | 🔴 GRACEFUL SHUTDOWN — Menutup semua posisi terbuka...
+2026-04-04 17:43:37,919 | INFO | ============================================================
+2026-04-04 17:43:38,043 | INFO | ℹ️  Tidak ada posisi terbuka — tidak ada yang perlu ditutup.
+2026-04-04 17:43:38,299 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 17:43:38,429 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 17:43:38,505 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 17:43:38,508 | INFO | ✅ Semua posisi berhasil ditutup. Bot berhenti dengan aman.
+2026-04-04 17:47:11,271 | INFO | ✅ Binance Futures (TESTNET ⚠️) — terhubung
+2026-04-04 17:47:12,571 | INFO | ✅ Supabase — terhubung
+2026-04-04 17:47:12,572 | INFO | 🛡️  GracefulShutdown terdaftar (SIGINT / SIGTERM / SIGHUP / atexit)
+2026-04-04 17:47:12,573 | INFO | 🚀 TradingBot dimulai!
+2026-04-04 17:47:12,960 | INFO | 📂 Model di-load dari model_trading.pkl
+2026-04-04 17:47:12,961 | INFO | ✅ Model ML siap.
+2026-04-04 17:47:14,662 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 17:47:14,663 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 17:47:14,666 | INFO | ────────────────────────────────────────────────────────────
+2026-04-04 17:47:14,667 | INFO | 🔁 Siklus #1 — 2026-04-04 10:47 UTC
+2026-04-04 17:47:14,815 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 17:47:16,824 | WARNING | ⚠️  Claude API HTTP 400 (attempt 1/3): Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.
+2026-04-04 17:47:16,825 | ERROR | ❌ Claude API error fatal (400) — tidak di-retry.
+2026-04-04 17:47:16,825 | ERROR | ❌ Claude API gagal setelah 3 percobaan. Fallback ke HOLD.
+2026-04-04 17:47:16,828 | INFO | 🤖 AI Decision=HOLD  | confidence=0% | ML=0(50%) | RSI=61.4 | ATR=37.03
+2026-04-04 17:47:16,829 | INFO | 💬 Reasoning: API tidak tersedia
+2026-04-04 17:47:16,830 | INFO | 💤 HOLD — AI memutuskan tidak ada entry yang layak
+2026-04-04 17:47:16,831 | INFO | ⏰ Scheduler aktif — eksekusi tiap 15 menit
+2026-04-04 17:47:51,502 | WARNING | 
+⚠️  Sinyal SIGINT diterima — memulai graceful shutdown...
+2026-04-04 17:47:51,503 | INFO | ============================================================
+2026-04-04 17:47:51,504 | INFO | 🔴 GRACEFUL SHUTDOWN — Menutup semua posisi terbuka...
+2026-04-04 17:47:51,505 | INFO | ============================================================
+2026-04-04 17:47:51,621 | INFO | ℹ️  Tidak ada posisi terbuka — tidak ada yang perlu ditutup.
+2026-04-04 17:47:51,929 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 17:47:52,063 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 17:47:52,065 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 17:47:52,066 | INFO | ✅ Semua posisi berhasil ditutup. Bot berhenti dengan aman.
+2026-04-04 18:07:34,414 | INFO | ✅ Binance Futures (TESTNET ⚠️) — terhubung
+2026-04-04 18:07:35,011 | INFO | ✅ Supabase — terhubung
+2026-04-04 18:07:35,014 | INFO | 🛡️  GracefulShutdown terdaftar (SIGINT / SIGTERM / SIGHUP / atexit)
+2026-04-04 18:07:35,017 | INFO | 🚀 TradingBot dimulai!
+2026-04-04 18:07:35,132 | INFO | 📂 Model di-load dari model_trading.pkl
+2026-04-04 18:07:35,133 | INFO | ✅ Model ML siap.
+2026-04-04 18:07:36,128 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:07:36,132 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 18:07:36,132 | INFO | ────────────────────────────────────────────────────────────
+2026-04-04 18:07:36,133 | INFO | 🔁 Siklus #1 — 2026-04-04 11:07 UTC
+2026-04-04 18:07:36,272 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:07:37,977 | WARNING | ⚠️  Claude API HTTP 404 (attempt 1/3): HTTP Error 404: Not Found
+2026-04-04 18:07:41,308 | WARNING | ⚠️  Claude API HTTP 404 (attempt 2/3): HTTP Error 404: Not Found
+2026-04-04 18:07:47,713 | WARNING | ⚠️  Claude API HTTP 404 (attempt 3/3): HTTP Error 404: Not Found
+2026-04-04 18:07:56,715 | ERROR | ❌ Claude API gagal setelah 3 percobaan. Fallback ke HOLD.
+2026-04-04 18:07:56,717 | INFO | 🤖 AI Decision=HOLD  | confidence=0% | ML=1(50%) | RSI=72.8 | ATR=46.53
+2026-04-04 18:07:56,717 | INFO | 💬 Reasoning: API tidak tersedia
+2026-04-04 18:07:56,718 | INFO | 💤 HOLD — AI memutuskan tidak ada entry yang layak
+2026-04-04 18:07:56,719 | INFO | ⏰ Scheduler aktif — eksekusi tiap 15 menit
+2026-04-04 18:07:59,405 | WARNING | 
+⚠️  Sinyal SIGINT diterima — memulai graceful shutdown...
+2026-04-04 18:07:59,418 | INFO | ============================================================
+2026-04-04 18:07:59,432 | INFO | 🔴 GRACEFUL SHUTDOWN — Menutup semua posisi terbuka...
+2026-04-04 18:07:59,433 | INFO | ============================================================
+2026-04-04 18:07:59,557 | INFO | ℹ️  Tidak ada posisi terbuka — tidak ada yang perlu ditutup.
+2026-04-04 18:07:59,845 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:07:59,986 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:08:00,060 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 18:08:00,061 | INFO | ✅ Semua posisi berhasil ditutup. Bot berhenti dengan aman.
+2026-04-04 18:14:16,408 | INFO | ✅ Binance Futures (TESTNET ⚠️) — terhubung
+2026-04-04 18:14:16,999 | INFO | ✅ Supabase — terhubung
+2026-04-04 18:14:17,000 | INFO | 🛡️  GracefulShutdown terdaftar (SIGINT / SIGTERM / SIGHUP / atexit)
+2026-04-04 18:14:17,001 | INFO | 🚀 TradingBot dimulai!
+2026-04-04 18:14:17,106 | INFO | 📂 Model di-load dari model_trading.pkl
+2026-04-04 18:14:17,106 | INFO | ✅ Model ML siap.
+2026-04-04 18:14:18,150 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:14:18,219 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 18:14:18,220 | INFO | ────────────────────────────────────────────────────────────
+2026-04-04 18:14:18,221 | INFO | 🔁 Siklus #1 — 2026-04-04 11:14 UTC
+2026-04-04 18:14:18,369 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:14:20,225 | WARNING | ⚠️  Gemini API HTTP 404 (attempt 1/3): models/gemini-1.5-flash is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.
+2026-04-04 18:14:23,514 | WARNING | ⚠️  Gemini API HTTP 404 (attempt 2/3): models/gemini-1.5-flash is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.
+2026-04-04 18:14:29,718 | WARNING | ⚠️  Gemini API HTTP 404 (attempt 3/3): models/gemini-1.5-flash is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.
+2026-04-04 18:14:38,720 | ERROR | ❌ Gemini API gagal setelah 3 percobaan. Fallback ke HOLD.
+2026-04-04 18:14:38,721 | INFO | 🤖 AI Decision=HOLD  | confidence=0% | ML=1(49%) | RSI=72.6 | ATR=46.53
+2026-04-04 18:14:38,722 | INFO | 💬 Reasoning: API tidak tersedia
+2026-04-04 18:14:38,724 | INFO | 💤 HOLD — AI memutuskan tidak ada entry yang layak
+2026-04-04 18:14:38,725 | INFO | ⏰ Scheduler aktif — eksekusi tiap 15 menit
+2026-04-04 18:15:26,465 | WARNING | 
+⚠️  Sinyal SIGINT diterima — memulai graceful shutdown...
+2026-04-04 18:15:26,469 | INFO | ============================================================
+2026-04-04 18:15:26,470 | INFO | 🔴 GRACEFUL SHUTDOWN — Menutup semua posisi terbuka...
+2026-04-04 18:15:26,471 | INFO | ============================================================
+2026-04-04 18:15:26,594 | INFO | ℹ️  Tidak ada posisi terbuka — tidak ada yang perlu ditutup.
+2026-04-04 18:15:27,160 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:15:27,385 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:15:27,457 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 18:15:27,458 | INFO | ✅ Semua posisi berhasil ditutup. Bot berhenti dengan aman.
+2026-04-04 18:15:36,887 | INFO | ✅ Binance Futures (TESTNET ⚠️) — terhubung
+2026-04-04 18:15:37,549 | INFO | ✅ Supabase — terhubung
+2026-04-04 18:15:37,552 | INFO | 🛡️  GracefulShutdown terdaftar (SIGINT / SIGTERM / SIGHUP / atexit)
+2026-04-04 18:15:37,553 | INFO | 🚀 TradingBot dimulai!
+2026-04-04 18:15:37,668 | INFO | 📂 Model di-load dari model_trading.pkl
+2026-04-04 18:15:37,669 | INFO | ✅ Model ML siap.
+2026-04-04 18:15:39,303 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:15:39,305 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 18:15:39,306 | INFO | ────────────────────────────────────────────────────────────
+2026-04-04 18:15:39,306 | INFO | 🔁 Siklus #1 — 2026-04-04 11:15 UTC
+2026-04-04 18:15:39,450 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:15:40,941 | WARNING | ⚠️  Gemini API HTTP 429 (attempt 1/3): You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+Please retry in 19.049739372s.
+2026-04-04 18:15:51,246 | WARNING | ⚠️  Gemini API HTTP 429 (attempt 2/3): You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 8.743975445s.
+2026-04-04 18:16:11,469 | WARNING | ⚠️  Gemini API HTTP 429 (attempt 3/3): You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 48.523167688s.
+2026-04-04 18:16:41,473 | ERROR | ❌ Gemini API gagal setelah 3 percobaan. Fallback ke HOLD.
+2026-04-04 18:16:41,478 | INFO | 🤖 AI Decision=HOLD  | confidence=0% | ML=1(48%) | RSI=72.3 | ATR=46.53
+2026-04-04 18:16:41,479 | INFO | 💬 Reasoning: API tidak tersedia
+2026-04-04 18:16:41,480 | INFO | 💤 HOLD — AI memutuskan tidak ada entry yang layak
+2026-04-04 18:16:41,481 | INFO | ⏰ Scheduler aktif — eksekusi tiap 15 menit
+2026-04-04 18:18:26,297 | WARNING | 
+⚠️  Sinyal SIGINT diterima — memulai graceful shutdown...
+2026-04-04 18:18:26,298 | INFO | ============================================================
+2026-04-04 18:18:26,299 | INFO | 🔴 GRACEFUL SHUTDOWN — Menutup semua posisi terbuka...
+2026-04-04 18:18:26,299 | INFO | ============================================================
+2026-04-04 18:18:26,412 | INFO | ℹ️  Tidak ada posisi terbuka — tidak ada yang perlu ditutup.
+2026-04-04 18:18:26,867 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:18:27,005 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:18:27,007 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 18:18:27,008 | INFO | ✅ Semua posisi berhasil ditutup. Bot berhenti dengan aman.
+2026-04-04 18:18:35,548 | INFO | ✅ Binance Futures (TESTNET ⚠️) — terhubung
+2026-04-04 18:18:36,219 | INFO | ✅ Supabase — terhubung
+2026-04-04 18:18:36,220 | INFO | 🛡️  GracefulShutdown terdaftar (SIGINT / SIGTERM / SIGHUP / atexit)
+2026-04-04 18:18:36,221 | INFO | 🚀 TradingBot dimulai!
+2026-04-04 18:18:36,327 | INFO | 📂 Model di-load dari model_trading.pkl
+2026-04-04 18:18:36,328 | INFO | ✅ Model ML siap.
+2026-04-04 18:18:36,958 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:18:36,971 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 18:18:36,979 | INFO | ────────────────────────────────────────────────────────────
+2026-04-04 18:18:36,981 | INFO | 🔁 Siklus #1 — 2026-04-04 11:18 UTC
+2026-04-04 18:18:37,121 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:18:41,120 | WARNING | ⚠️  Gagal parse response Gemini (attempt 1/3): Expecting value: line 1 column 1 (char 0)
+2026-04-04 18:18:46,401 | WARNING | ⚠️  Gagal parse response Gemini (attempt 2/3): 'parts'
+2026-04-04 18:18:51,867 | WARNING | ⚠️  Gagal parse response Gemini (attempt 3/3): Expecting value: line 1 column 1 (char 0)
+2026-04-04 18:18:54,869 | ERROR | ❌ Gemini API gagal setelah 3 percobaan. Fallback ke HOLD.
+2026-04-04 18:18:54,871 | INFO | 🤖 AI Decision=HOLD  | confidence=0% | ML=1(48%) | RSI=72.3 | ATR=43.65
+2026-04-04 18:18:54,871 | INFO | 💬 Reasoning: API tidak tersedia
+2026-04-04 18:18:54,873 | INFO | 💤 HOLD — AI memutuskan tidak ada entry yang layak
+2026-04-04 18:18:54,873 | INFO | ⏰ Scheduler aktif — eksekusi tiap 15 menit
+2026-04-04 18:19:03,625 | WARNING | 
+⚠️  Sinyal SIGINT diterima — memulai graceful shutdown...
+2026-04-04 18:19:03,626 | INFO | ============================================================
+2026-04-04 18:19:03,626 | INFO | 🔴 GRACEFUL SHUTDOWN — Menutup semua posisi terbuka...
+2026-04-04 18:19:03,626 | INFO | ============================================================
+2026-04-04 18:19:03,744 | INFO | ℹ️  Tidak ada posisi terbuka — tidak ada yang perlu ditutup.
+2026-04-04 18:19:03,999 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:19:04,145 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:19:04,217 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 18:19:04,218 | INFO | ✅ Semua posisi berhasil ditutup. Bot berhenti dengan aman.
+2026-04-04 18:22:31,830 | INFO | ✅ Binance Futures (TESTNET ⚠️) — terhubung
+2026-04-04 18:22:32,466 | INFO | ✅ Supabase — terhubung
+2026-04-04 18:22:32,467 | INFO | 🛡️  GracefulShutdown terdaftar (SIGINT / SIGTERM / SIGHUP / atexit)
+2026-04-04 18:22:32,468 | INFO | 🚀 TradingBot dimulai!
+2026-04-04 18:22:32,602 | INFO | 📂 Model di-load dari model_trading.pkl
+2026-04-04 18:22:32,603 | INFO | ✅ Model ML siap.
+2026-04-04 18:22:33,416 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:22:33,418 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 18:22:33,419 | INFO | ────────────────────────────────────────────────────────────
+2026-04-04 18:22:33,420 | INFO | 🔁 Siklus #1 — 2026-04-04 11:22 UTC
+2026-04-04 18:22:33,561 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:22:34,965 | WARNING | ⚠️  Gemini API HTTP 400 (attempt 1/3): Invalid JSON payload received. Unknown name "thinkingConfig": Cannot find field.
+2026-04-04 18:22:34,966 | ERROR | ❌ Gemini API error fatal (400) — tidak di-retry.
+2026-04-04 18:22:34,966 | ERROR | ❌ Gemini API gagal setelah 3 percobaan. Fallback ke HOLD.
+2026-04-04 18:22:34,967 | INFO | 🤖 AI Decision=HOLD  | confidence=0% | ML=1(46%) | RSI=66.3 | ATR=46.01
+2026-04-04 18:22:34,968 | INFO | 💬 Reasoning: API tidak tersedia
+2026-04-04 18:22:34,968 | INFO | 💤 HOLD — AI memutuskan tidak ada entry yang layak
+2026-04-04 18:22:34,969 | INFO | ⏰ Scheduler aktif — eksekusi tiap 15 menit
+2026-04-04 18:24:25,597 | WARNING | 
+⚠️  Sinyal SIGINT diterima — memulai graceful shutdown...
+2026-04-04 18:24:25,597 | INFO | ============================================================
+2026-04-04 18:24:25,598 | INFO | 🔴 GRACEFUL SHUTDOWN — Menutup semua posisi terbuka...
+2026-04-04 18:24:25,599 | INFO | ============================================================
+2026-04-04 18:24:25,737 | INFO | ℹ️  Tidak ada posisi terbuka — tidak ada yang perlu ditutup.
+2026-04-04 18:24:26,208 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:24:26,363 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:24:26,364 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 18:24:26,365 | INFO | ✅ Semua posisi berhasil ditutup. Bot berhenti dengan aman.
+2026-04-04 18:24:35,684 | INFO | ✅ Binance Futures (TESTNET ⚠️) — terhubung
+2026-04-04 18:24:36,260 | INFO | ✅ Supabase — terhubung
+2026-04-04 18:24:36,261 | INFO | 🛡️  GracefulShutdown terdaftar (SIGINT / SIGTERM / SIGHUP / atexit)
+2026-04-04 18:24:36,261 | INFO | 🚀 TradingBot dimulai!
+2026-04-04 18:24:36,368 | INFO | 📂 Model di-load dari model_trading.pkl
+2026-04-04 18:24:36,369 | INFO | ✅ Model ML siap.
+2026-04-04 18:24:36,983 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:24:36,986 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 18:24:36,991 | INFO | ────────────────────────────────────────────────────────────
+2026-04-04 18:24:36,992 | INFO | 🔁 Siklus #1 — 2026-04-04 11:24 UTC
+2026-04-04 18:24:37,134 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:24:41,690 | WARNING | ⚠️  Gagal parse response Gemini (attempt 1/3): Unterminated string starting at: line 1 column 52 (char 51)
+2026-04-04 18:24:48,125 | WARNING | ⚠️  Gagal parse response Gemini (attempt 2/3): Expecting value: line 1 column 52 (char 51)
+2026-04-04 18:24:54,705 | WARNING | ⚠️  Gagal parse response Gemini (attempt 3/3): Expecting ',' delimiter: line 3 column 18 (char 39)
+2026-04-04 18:24:57,709 | ERROR | ❌ Gemini API gagal setelah 3 percobaan. Fallback ke HOLD.
+2026-04-04 18:24:57,710 | INFO | 🤖 AI Decision=HOLD  | confidence=0% | ML=1(47%) | RSI=66.6 | ATR=46.01
+2026-04-04 18:24:57,711 | INFO | 💬 Reasoning: API tidak tersedia
+2026-04-04 18:24:57,711 | INFO | 💤 HOLD — AI memutuskan tidak ada entry yang layak
+2026-04-04 18:24:57,712 | INFO | ⏰ Scheduler aktif — eksekusi tiap 15 menit
+2026-04-04 18:26:16,366 | WARNING | 
+⚠️  Sinyal SIGINT diterima — memulai graceful shutdown...
+2026-04-04 18:26:16,366 | INFO | ============================================================
+2026-04-04 18:26:16,367 | INFO | 🔴 GRACEFUL SHUTDOWN — Menutup semua posisi terbuka...
+2026-04-04 18:26:16,368 | INFO | ============================================================
+2026-04-04 18:26:16,510 | INFO | ℹ️  Tidak ada posisi terbuka — tidak ada yang perlu ditutup.
+2026-04-04 18:26:16,815 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:26:17,048 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:26:17,138 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 18:26:17,139 | INFO | ✅ Semua posisi berhasil ditutup. Bot berhenti dengan aman.
+2026-04-04 18:26:26,311 | INFO | ✅ Binance Futures (TESTNET ⚠️) — terhubung
+2026-04-04 18:26:26,986 | INFO | ✅ Supabase — terhubung
+2026-04-04 18:26:26,986 | INFO | 🛡️  GracefulShutdown terdaftar (SIGINT / SIGTERM / SIGHUP / atexit)
+2026-04-04 18:26:26,986 | INFO | 🚀 TradingBot dimulai!
+2026-04-04 18:26:27,140 | INFO | 📂 Model di-load dari model_trading.pkl
+2026-04-04 18:26:27,141 | INFO | ✅ Model ML siap.
+2026-04-04 18:26:27,788 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:26:27,792 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 18:26:27,792 | INFO | ────────────────────────────────────────────────────────────
+2026-04-04 18:26:27,793 | INFO | 🔁 Siklus #1 — 2026-04-04 11:26 UTC
+2026-04-04 18:26:27,932 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:26:35,082 | INFO | 🤖 AI Decision=HOLD  | confidence=60% | ML=1(45%) | RSI=66.3 | ATR=46.01
+2026-04-04 18:26:35,083 | INFO | 💬 Reasoning: Price below VWAPs, RSI overbought, but MACD bullish. ML low confidence.
+2026-04-04 18:26:35,084 | INFO | 💤 HOLD — AI memutuskan tidak ada entry yang layak
+2026-04-04 18:26:35,085 | INFO | ⏰ Scheduler aktif — eksekusi tiap 15 menit
+2026-04-04 18:41:35,144 | INFO | ────────────────────────────────────────────────────────────
+2026-04-04 18:41:35,145 | INFO | 🔁 Siklus #2 — 2026-04-04 11:41 UTC
+2026-04-04 18:41:36,165 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:41:44,818 | INFO | 🤖 AI Decision=HOLD  | confidence=60% | ML=1(46%) | RSI=63.1 | ATR=44.68
+2026-04-04 18:41:44,821 | INFO | 💬 Reasoning: Price below VWAPs, but MACD bullish and RSI strong. ML confidence low.
+2026-04-04 18:41:44,827 | INFO | 💤 HOLD — AI memutuskan tidak ada entry yang layak
+2026-04-04 18:48:48,646 | WARNING | 
+⚠️  Sinyal SIGINT diterima — memulai graceful shutdown...
+2026-04-04 18:48:48,647 | INFO | ============================================================
+2026-04-04 18:48:48,650 | INFO | 🔴 GRACEFUL SHUTDOWN — Menutup semua posisi terbuka...
+2026-04-04 18:48:48,651 | INFO | ============================================================
+2026-04-04 18:48:49,436 | INFO | ℹ️  Tidak ada posisi terbuka — tidak ada yang perlu ditutup.
+2026-04-04 18:48:49,887 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:48:50,025 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-04 18:48:50,105 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-04 18:48:50,106 | INFO | ✅ Semua posisi berhasil ditutup. Bot berhenti dengan aman.

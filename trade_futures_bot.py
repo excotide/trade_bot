@@ -41,6 +41,7 @@ Cara pakai:
 # ─────────────────────────────────────────────────────────
 # IMPORTS
 # ─────────────────────────────────────────────────────────
+import os
 import time
 import logging
 import warnings
@@ -49,7 +50,6 @@ import schedule
 import signal
 import atexit
 import sys
-import os
 import numpy as np
 import pandas as pd
 
@@ -98,17 +98,21 @@ log = logging.getLogger(__name__)
 
 class Config:
 
-    load_dotenv()
+    load_dotenv()   # Baca file .env otomatis dari direktori yang sama
+
+    # ── Google Gemini API ─────────────────────────────────────────────
+    GEMINI_API_KEY     = os.getenv("GEMINI_API_KEY")       # dari aistudio.google.com/apikey
+
     # ── Binance Futures ───────────────────────────────────────────────
-    BINANCE_API_KEY    = os.getenv('BINANCE_DEMO_API_KEY')
-    BINANCE_API_SECRET = os.getenv('BINANCE_DEMO_SECRET_KEY')
+    BINANCE_API_KEY    = os.getenv("BINANCE_DEMO_API_KEY")
+    BINANCE_API_SECRET = os.getenv("BINANCE_DEMO_SECRET_KEY")
     #   Testnet : "https://testnet.binancefuture.com"
     #   Live    : "https://fapi.binance.com"
     BINANCE_BASE_URL   = "https://testnet.binancefuture.com"
 
     # ── Supabase ──────────────────────────────────────────────────────
-    SUPABASE_URL       = os.getenv('SUPABASE_URL')   # URL project Supabase kamu
-    SUPABASE_KEY       = os.getenv('SUPABASE_KEY')      # Anon / service_role key
+    SUPABASE_URL       = os.getenv("SUPABASE_URL")
+    SUPABASE_KEY       = os.getenv("SUPABASE_KEY")
     SUPABASE_TABLE     = "trades"
 
     # ── Symbol & Timeframe ────────────────────────────────────────────
@@ -765,68 +769,302 @@ class MLModel:
 
 
 # ╔══════════════════════════════════════════════════════════════════════╗
-# ║                  7. SIGNAL ENGINE (RULE-BASED)                      ║
+# ║              7. AI DECISION ENGINE (Gemini API — Free Tier)         ║
 # ╚══════════════════════════════════════════════════════════════════════╝
 
-class SignalEngine:
+class AIDecisionEngine:
     """
-    Konfluensi multi-kondisi sebelum mengambil posisi:
-      1. Bias VWAP (kontrol pembeli/penjual)
-      2. RSI keluar zona ekstrem  ATAU  MACD crossover
-      3. Konfirmasi tren 1H searah
-      4. ML confidence ≥ 60%
+    Keputusan trading dari Google Gemini Flash (GRATIS, 1.500 req/hari).
 
-    Semua 4 kondisi wajib terpenuhi → ini yang bikin bot selektif
-    dan menghasilkan win-rate lebih tinggi.
+    Semua data teknikal (VWAP, RSI, MACD, ATR, price action, funding rate,
+    open interest, dan prediksi ML) dikirim ke Gemini sebagai konteks.
+    Gemini membaca seluruh gambaran pasar dan output-nya berupa JSON:
+      {
+        "action"     : "LONG" | "SHORT" | "HOLD",
+        "confidence" : float (0.0 – 1.0),
+        "reasoning"  : "penjelasan singkat keputusan"
+      }
+
+    Free tier Gemini Flash:
+      - 1.500 request/hari  (bot pakai ~96/hari → sangat aman)
+      - 15 request/menit
+      - Daftar API key gratis: aistudio.google.com/apikey
     """
+
+    # Gemini REST endpoint — generateContent untuk gemini-1.5-flash
+    GEMINI_API_URL = (
+        "https://generativelanguage.googleapis.com/v1beta/models"
+        "/gemini-2.5-flash:generateContent"
+    )
+    MODEL = "gemini-2.5-flash"
+
+    # System instruction — dikirim sebagai systemInstruction di Gemini API
+    SYSTEM_PROMPT = """Kamu adalah analis trading algoritmik di Binance Futures.
+Balas HANYA dengan satu baris JSON, tidak ada teks lain sama sekali.
+Format WAJIB (satu baris, tanpa newline):
+{"action":"HOLD","confidence":0.75,"reasoning":"max 10 kata alasan"}
+Aturan: action hanya LONG/SHORT/HOLD, confidence 0.0-1.0, reasoning maksimal 10 kata."""
+
+    def __init__(self, api_key: str):
+        self.api_key          = api_key
+        self._last_reasoning  = ""   # Simpan reasoning terakhir untuk logging
 
     @staticmethod
-    def compute(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
-                ml_result: dict) -> dict:
+    def _build_snapshot(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
+                        ml_result: dict, open_positions: list,
+                        balance: float, funding_rate: float,
+                        open_interest: float) -> dict:
+        """
+        Kumpulkan semua data relevan menjadi satu snapshot pasar
+        yang akan dikirim ke Claude sebagai konteks.
+        """
+        last_15m = df_15m.iloc[-1]
+        prev_15m = df_15m.iloc[-2]
+        last_1h  = df_1h.iloc[-1]
 
-        last  = df_15m.iloc[-1]
-        prev  = df_15m.iloc[-2]
-        trend = df_1h.iloc[-1]
+        # Deteksi MACD crossover
+        macd_cross = "none"
+        if prev_15m["macd"] <= prev_15m["macd_sig"] and last_15m["macd"] > last_15m["macd_sig"]:
+            macd_cross = "bullish_crossover"
+        elif prev_15m["macd"] >= prev_15m["macd_sig"] and last_15m["macd"] < last_15m["macd_sig"]:
+            macd_cross = "bearish_crossover"
 
-        # Kondisi 1 — VWAP bias
-        vwap_bull = last["close"] > last["vwap"] * (1 + Config.VWAP_BAND_PCT)
-        vwap_bear = last["close"] < last["vwap"] * (1 - Config.VWAP_BAND_PCT)
+        # Hitung candle terakhir naik/turun berapa persen
+        candle_change_pct = round((last_15m["close"] - last_15m["open"]) / last_15m["open"] * 100, 3)
 
-        # Kondisi 2 — RSI atau MACD
-        rsi_long  = last["rsi"] < Config.RSI_OVERSOLD
-        rsi_short = last["rsi"] > Config.RSI_OVERBOUGHT
-        macd_up   = (prev["macd"] <= prev["macd_sig"]) and (last["macd"] > last["macd_sig"])
-        macd_down = (prev["macd"] >= prev["macd_sig"]) and (last["macd"] < last["macd_sig"])
-
-        # Kondisi 3 — Tren 1H
-        trend_up   = trend["close"] > trend["vwap"]
-        trend_down = trend["close"] < trend["vwap"]
-
-        # Kondisi 4 — ML gate
-        ml_long  = ml_result["signal"] ==  1 and ml_result["confidence"] >= Config.ML_CONFIDENCE
-        ml_short = ml_result["signal"] == -1 and ml_result["confidence"] >= Config.ML_CONFIDENCE
-
-        # Final decision (semua harus True)
-        go_long  = vwap_bull and (rsi_long  or macd_up)   and trend_up   and ml_long
-        go_short = vwap_bear and (rsi_short or macd_down) and trend_down and ml_short
-
-        action = "LONG" if go_long else ("SHORT" if go_short else "HOLD")
-
-        log.info(
-            f"📊 Signal={action:5s} | "
-            f"VWAP={'↑' if vwap_bull else '↓' if vwap_bear else '–'} | "
-            f"RSI={last['rsi']:.1f} | "
-            f"MACD_h={last['macd_hist']:.5f} | "
-            f"ML={ml_result['signal']}({ml_result['confidence']:.0%}) | "
-            f"ATR={last['atr']:.2f}"
-        )
+        # Return 5 candle terakhir sebagai konteks momentum
+        recent_closes = df_15m["close"].tail(5).round(2).tolist()
+        recent_volumes = df_15m["volume_zscore"].tail(5).round(3).tolist()
 
         return {
-            "action"   : action,
-            "close"    : float(last["close"]),
-            "atr"      : float(last["atr"]),
-            "ml_conf"  : float(ml_result["confidence"]),
-            "signal_ts": str(df_15m.index[-1]),
+            "timestamp_utc"   : str(df_15m.index[-1]),
+            "symbol"          : Config.SYMBOL,
+            "timeframe_signal": Config.TF_SIGNAL,
+            "timeframe_trend" : Config.TF_TREND,
+
+            # ── Harga & VWAP ─────────────────────────────────────────
+            "price": {
+                "current"         : round(float(last_15m["close"]), 2),
+                "vwap_15m"        : round(float(last_15m["vwap"]), 2),
+                "vwap_dist_pct"   : round(float(last_15m["vwap_dist_pct"]) * 100, 3),
+                "vwap_1h"         : round(float(last_1h["vwap"]), 2),
+                "above_vwap_15m"  : bool(last_15m["close"] > last_15m["vwap"]),
+                "above_vwap_1h"   : bool(last_1h["close"] > last_1h["vwap"]),
+                "candle_change_pct": candle_change_pct,
+                "recent_closes_5" : recent_closes,
+            },
+
+            # ── Momentum & Tren ──────────────────────────────────────
+            "indicators": {
+                "rsi_14"          : round(float(last_15m["rsi"]), 2),
+                "rsi_zone"        : (
+                    "oversold"    if last_15m["rsi"] < Config.RSI_OVERSOLD  else
+                    "overbought"  if last_15m["rsi"] > Config.RSI_OVERBOUGHT else
+                    "neutral"
+                ),
+                "macd"            : round(float(last_15m["macd"]), 6),
+                "macd_signal"     : round(float(last_15m["macd_sig"]), 6),
+                "macd_histogram"  : round(float(last_15m["macd_hist"]), 6),
+                "macd_crossover"  : macd_cross,
+                "atr_14"          : round(float(last_15m["atr"]), 2),
+                "atr_pct"         : round(float(last_15m["atr_pct"]) * 100, 3),
+            },
+
+            # ── Price Action ─────────────────────────────────────────
+            "price_action": {
+                "log_return_1c"   : round(float(last_15m["log_ret_1"]), 6),
+                "log_return_5c"   : round(float(last_15m["log_ret_5"]), 6),
+                "log_return_20c"  : round(float(last_15m["log_ret_20"]), 6),
+                "body_size_pct"   : round(float(last_15m["body_size"]) * 100, 3),
+                "upper_wick_pct"  : round(float(last_15m["upper_wick"]) * 100, 3),
+                "lower_wick_pct"  : round(float(last_15m["lower_wick"]) * 100, 3),
+                "volatility_20c"  : round(float(last_15m["volatility_20"]), 6),
+                "price_position"  : round(float(last_15m["price_position"]), 3),
+                "volume_zscore"   : round(float(last_15m["volume_zscore"]), 3),
+                "recent_vol_zscore_5": recent_volumes,
+            },
+
+            # ── Derivatif Futures ────────────────────────────────────
+            "derivatives": {
+                "funding_rate"    : round(funding_rate * 100, 6),
+                "funding_bias"    : (
+                    "bullish_overheated" if funding_rate > 0.001 else
+                    "bearish_overheated" if funding_rate < -0.001 else
+                    "neutral"
+                ),
+                "open_interest"   : round(open_interest, 2),
+            },
+
+            # ── Prediksi ML (Random Forest + Gradient Boosting) ──────
+            "ml_ensemble": {
+                "signal"          : ml_result["signal"],
+                "signal_label"    : (
+                    "LONG" if ml_result["signal"] ==  1 else
+                    "SHORT" if ml_result["signal"] == -1 else "HOLD"
+                ),
+                "confidence"      : round(ml_result["confidence"], 4),
+                "above_threshold" : ml_result["confidence"] >= Config.ML_CONFIDENCE,
+            },
+
+            # ── Kondisi Akun ─────────────────────────────────────────
+            "account": {
+                "balance_usdt"    : round(balance, 2),
+                "open_positions"  : len(open_positions),
+                "max_positions"   : Config.MAX_OPEN_TRADES,
+                "risk_per_trade"  : f"{Config.RISK_PER_TRADE*100:.0f}%",
+                "sl_atr_mult"     : Config.ATR_SL_MULT,
+                "tp_atr_mult"     : Config.ATR_TP_MULT,
+            },
+        }
+
+    def _call_gemini(self, snapshot: dict) -> dict:
+        """
+        Kirim snapshot pasar ke Gemini API dan parse responsenya.
+        Retry otomatis 2x jika gagal (network hiccup, rate limit, dll).
+
+        Gemini API pakai query param ?key=API_KEY (bukan header x-api-key).
+        Return: {"action": str, "confidence": float, "reasoning": str}
+        """
+        import json
+        import urllib.request
+        import urllib.error
+        import urllib.parse
+
+        user_message = (
+            "Analisis data pasar berikut dan buat keputusan trading:\n\n"
+            f"{json.dumps(snapshot, indent=2, ensure_ascii=False)}\n\n"
+            "Berikan keputusan trading dalam format JSON yang diminta."
+        )
+
+        # Gemini API: systemInstruction terpisah dari contents
+        payload = json.dumps({
+            "systemInstruction": {
+                "parts": [{"text": self.SYSTEM_PROMPT}]
+            },
+            "contents": [
+                {"role": "user", "parts": [{"text": user_message}]}
+            ],
+            "generationConfig": {
+                "maxOutputTokens": 1024,
+                "temperature"    : 0.1,
+            },
+        }).encode("utf-8")
+
+        # API key dimasukkan sebagai query parameter (bukan header)
+        url     = f"{self.GEMINI_API_URL}?key={urllib.parse.quote(self.api_key)}"
+        headers = {"Content-Type": "application/json"}
+
+        for attempt in range(1, 4):   # Max 3 percobaan
+            try:
+                req  = urllib.request.Request(url, data=payload, headers=headers)
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+
+                log.debug(f"Gemini raw: {str(body)[:400]}")
+
+                # Ekstrak teks — robust terhadap variasi struktur Gemini 2.5
+                raw_text = ""
+                try:
+                    parts = body["candidates"][0]["content"]["parts"]
+                    # Ambil semua part bertipe "text", skip part bertipe "thought"
+                    texts = [p["text"] for p in parts if p.get("text") and not p.get("thought")]
+                    raw_text = " ".join(texts).strip()
+                except (KeyError, IndexError):
+                    pass
+
+                if not raw_text:
+                    log.warning(f"⚠️  Gemini response kosong, body={str(body)[:200]}")
+                    time.sleep(3 * attempt)
+                    continue
+
+                # Strip markdown fence kalau ada (```json ... ```)
+                if "```" in raw_text:
+                    raw_text = raw_text.split("```")[1]
+                    if raw_text.startswith("json"):
+                        raw_text = raw_text[4:]
+                    raw_text = raw_text.strip()
+
+                # Strip karakter non-JSON di awal/akhir
+                start = raw_text.find("{")
+                end   = raw_text.rfind("}") + 1
+                if start != -1 and end > start:
+                    raw_text = raw_text[start:end]
+
+                decision = json.loads(raw_text)
+
+                # Validasi struktur JSON
+                action = decision.get("action", "HOLD").upper()
+                if action not in ("LONG", "SHORT", "HOLD"):
+                    action = "HOLD"
+
+                return {
+                    "action"    : action,
+                    "confidence": float(decision.get("confidence", 0.0)),
+                    "reasoning" : str(decision.get("reasoning", "–")),
+                }
+
+            except urllib.error.HTTPError as e:
+                # Baca body error dari Anthropic supaya pesan spesifik kelihatan di log
+                try:
+                    err_body = json.loads(e.read().decode("utf-8"))
+                    err_msg  = err_body.get("error", {}).get("message", str(e))
+                except Exception:
+                    err_msg  = str(e)
+                log.warning(
+                    f"⚠️  Gemini API HTTP {e.code} (attempt {attempt}/3): {err_msg}"
+                )
+                if e.code == 429:
+                    time.sleep(10 * attempt)
+                elif e.code in (400, 401, 403):
+                    # 400/401/403 tidak akan berhasil di-retry → langsung keluar
+                    log.error(f"❌ Gemini API error fatal ({e.code}) — tidak di-retry.")
+                    break
+                else:
+                    time.sleep(3 * attempt)
+
+            except (json.JSONDecodeError, KeyError) as e:
+                log.warning(f"⚠️  Gagal parse response Gemini (attempt {attempt}/3): {e}")
+                time.sleep(3)
+
+            except Exception as e:
+                log.warning(f"⚠️  Error Gemini API (attempt {attempt}/3): {e}")
+                time.sleep(3 * attempt)
+
+        # Semua retry gagal → fallback ke HOLD yang aman
+        log.error("❌ Gemini API gagal setelah 3 percobaan. Fallback ke HOLD.")
+        return {"action": "HOLD", "confidence": 0.0, "reasoning": "API tidak tersedia"}
+
+    def compute(self, df_15m: pd.DataFrame, df_1h: pd.DataFrame,
+                ml_result: dict, open_positions: list,
+                balance: float, funding_rate: float,
+                open_interest: float) -> dict:
+        """
+        Entry point utama — bangun snapshot, kirim ke Gemini, return keputusan.
+        """
+        snapshot = self._build_snapshot(
+            df_15m, df_1h, ml_result, open_positions,
+            balance, funding_rate, open_interest
+        )
+
+        decision = self._call_gemini(snapshot)
+        self._last_reasoning = decision["reasoning"]
+
+        log.info(
+            f"🤖 AI Decision={decision['action']:5s} | "
+            f"confidence={decision['confidence']:.0%} | "
+            f"ML={ml_result['signal']}({ml_result['confidence']:.0%}) | "
+            f"RSI={df_15m.iloc[-1]['rsi']:.1f} | "
+            f"ATR={df_15m.iloc[-1]['atr']:.2f}"
+        )
+        log.info(f"💬 Reasoning: {decision['reasoning']}")
+
+        return {
+            "action"    : decision["action"],
+            "close"     : float(df_15m.iloc[-1]["close"]),
+            "atr"       : float(df_15m.iloc[-1]["atr"]),
+            "ml_conf"   : float(ml_result["confidence"]),
+            "ai_conf"   : decision["confidence"],
+            "signal_ts" : str(df_15m.index[-1]),
         }
 
 
@@ -1297,6 +1535,7 @@ class TradingBot:
         self.ml       = MLModel()
         self.orders   = OrderManager(self.fetcher, self.db)
         self.monitor  = PositionMonitor(self.fetcher, self.db)
+        self.ai       = AIDecisionEngine(Config.GEMINI_API_KEY)
         self._cycle   = 0
         # Daftarkan handler shutdown — harus setelah fetcher & db siap
         self.shutdown = GracefulShutdown(self.fetcher, self.db)
@@ -1350,19 +1589,31 @@ class TradingBot:
             df_15m = FeatureEngineer.build_features(df_15m, fr, oi)
             df_1h  = FeatureEngineer.build_features(df_1h,  fr, oi)
 
-            # 4. Prediksi ML
+            # 4. Prediksi ML (Random Forest + Gradient Boosting)
             ml_result = self.ml.predict(df_15m)
 
-            # 5. Hitung sinyal akhir
-            signal = SignalEngine.compute(df_15m, df_1h, ml_result)
+            # 5. Ambil kondisi akun real-time untuk konteks AI
+            balance      = self.fetcher.fetch_balance()
+            open_pos     = self.fetcher.fetch_open_positions(Config.SYMBOL)
 
-            # 6. Eksekusi order (kalau tidak HOLD)
+            # 6. Keputusan AI — Claude membaca semua data dan output LONG/SHORT/HOLD
+            signal = self.ai.compute(
+                df_15m       = df_15m,
+                df_1h        = df_1h,
+                ml_result    = ml_result,
+                open_positions = open_pos,
+                balance      = balance,
+                funding_rate = fr,
+                open_interest = oi,
+            )
+
+            # 7. Eksekusi order (kalau tidak HOLD)
             if signal["action"] != "HOLD":
                 self.orders.place_order(signal)
             else:
-                log.info("💤 HOLD — tidak ada kondisi entry terpenuhi")
+                log.info("💤 HOLD — AI memutuskan tidak ada entry yang layak")
 
-            # 7. Tampilkan stats setiap 10 siklus
+            # 8. Tampilkan stats setiap 10 siklus
             if self._cycle % 10 == 0:
                 self.db.get_stats()
 
