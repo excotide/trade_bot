@@ -53,15 +53,16 @@ TIMEFRAME      = '5m'     # ← kembali ke 5 menit
 LEVERAGE       = 10
 MARGIN_USDT    = 10.0
 
-AMBANG_TEKNIKAL = 65
-AMBANG_AI       = 60.0
+# --- PARAMETER GATE DILONGGARKAN AGAR TIDAK TIDUR TERUS ---
+AMBANG_TEKNIKAL = 50      # was 65
+AMBANG_AI       = 53.0    # was 60.0
 
 # SL & Trailing dikembalikan ke nilai 5m
 TRAILING_ATR_MULTIPLIER = 0.5   # was 0.3 di 1m
 SL_AWAL_ATR_MULTIPLIER  = 0.8   # was 0.5 di 1m
 
-# RSI konsistensi — di 5m cukup 3 candle (= 15 menit)
-RSI_KONSISTENSI_CANDLE = 3      # was 5 di 1m
+# RSI konsistensi — dipercepat
+RSI_KONSISTENSI_CANDLE = 2      # was 3
 
 # EMA setting — di 5m pakai EMA lebih panjang
 EMA_PENDEK  = 50    # was 20 di 1m
@@ -324,15 +325,6 @@ def latih_ai_diawal():
 # ==========================================
 # 5. GATE 3 — SENTIMEN REALTIME (BARU)
 # ==========================================
-# Mengganti RSS+FinBERT yang lag berjam-jam dengan 3 sumber data realtime:
-#   A) Fear & Greed Index (CoinyBubble) — update tiap ~1 menit, gratis, no key
-#   B) Funding Rate (Binance) — update tiap beberapa menit, no key
-#   C) Long/Short Ratio (Binance) — update tiap 5 menit, no key
-#
-# Logika:
-#   LONG cocok  → pasar Fear (orang takut = buy opportunity) + funding negatif + banyak short
-#   SHORT cocok → pasar Greed (orang serakah = koreksi datang) + funding positif + banyak long
-
 def ambil_fear_greed():
     """
     Ambil Fear & Greed Index dari CoinyBubble.
@@ -430,7 +422,7 @@ def analisis_sentimen_realtime(arah_sinyal):
         ls_ratio, long_pct, short_pct, ls_status = _cache_sentimen['data']
     else:
         fng_nilai, fng_label, fng_status       = ambil_fear_greed()
-        fund_rate, fund_status                  = ambil_funding_rate()
+        fund_rate, fund_status                 = ambil_funding_rate()
         ls_ratio, long_pct, short_pct, ls_status = ambil_long_short_ratio()
 
         _cache_sentimen['data'] = (
@@ -594,24 +586,7 @@ def ambil_data_live():
 def hitung_skor_teknikal(bar, df, idx):
     """
     Gate 1 — Lean 3-Indicator System (sinkron dengan ML)
-
-    Dipilih berdasarkan konsistensi dengan ML prediction:
-
-    BULLISH (LONG):              BEARISH (SHORT):
-    ─────────────────────        ──────────────────────
-    1. EMA Trend  (30-40)        1. EMA Trend  (30-40)
-    2. MACD       (25-35)        2. MACD       (25-35)
-    3. OBV        (20-25)        3. RSI OB↓    (25-35)
-
-    Total base max = 100, confluence bonus bisa tambah hingga +30.
-
-    Kenapa 3 saja?
-    - ML belajar dari pola harga & volume — EMA, MACD, OBV sangat dekat
-      dengan fitur yang ML gunakan, jadi keduanya cenderung agree
-    - RSI OB hanya untuk SHORT karena ML sangat akurat di kondisi
-      overbought reversal (pola sangat jelas di data historis)
-    - Stochastic, Ichimoku, Divergence dihapus — terlalu noise di 1m
-      dan sering jadi sumber konflik dengan ML
+    (Versi yang lebih longgar agar bot lebih reaktif)
     """
     rincian_long  = {}
     rincian_short = {}
@@ -627,17 +602,17 @@ def hitung_skor_teknikal(bar, df, idx):
     macd_line = bar.get('MACD_12_26_9',  0)
     macd_sig  = bar.get('MACDs_12_26_9', 0)
     macd_hist = bar.get('MACDh_12_26_9', 0)
+    
     rsi       = bar['RSI_14']
     rsi_c1    = df.iloc[idx - 1]['RSI_14'] if idx >= 1 else rsi
-    rsi_cn    = df.iloc[idx - RSI_KONSISTENSI_CANDLE]['RSI_14'] if idx >= RSI_KONSISTENSI_CANDLE else rsi
     obv       = bar.get('OBV',     0)
     obv_ema   = bar.get('OBV_EMA', 0)
 
-    MARGIN_EMA      = 0.0015
+    # DILONGGARKAN: Jarak ke EMA dari 0.15% jadi 0.05% agar tren lebih cepat terdeteksi
+    MARGIN_EMA      = 0.0005 
     jarak_h_ema50   = ((h - ema50)  / ema50)  * 100
     jarak_ema50_200 = ((ema50 - ema200) / ema200) * 100
 
-    # Rata-rata histogram MACD 20 candle terakhir sebagai baseline intensity
     col_hist   = 'MACDh_12_26_9'
     hist_mean  = df[col_hist].iloc[max(0, idx-20):idx].abs().mean() if col_hist in df.columns and idx >= 20 else 1
     hist_ratio = abs(macd_hist) / hist_mean if hist_mean > 0 else 1.0
@@ -649,22 +624,22 @@ def hitung_skor_teknikal(bar, df, idx):
     # =========================================================================
 
     # 1. EMA Trend LONG (bobot 30-40)
-    ema_long = (h > ema50 * (1 + MARGIN_EMA)) and (ema50 > ema200 * (1 + MARGIN_EMA))
+    ema_long = (h > ema50 * (1 + MARGIN_EMA)) and (ema50 > ema200)
     if ema_long:
         d = abs(jarak_h_ema50)
-        if d > 1.0:   bobot = 40; lvl = "💪 SANGAT KUAT"
-        elif d > 0.5: bobot = 35; lvl = "✊ KUAT"
+        if d > 0.8:   bobot = 40; lvl = "💪 SANGAT KUAT"
+        elif d > 0.4: bobot = 35; lvl = "✊ KUAT"
         else:         bobot = 30; lvl = "👌 NORMAL"
         skor_long += bobot; confluence_long += 1
-        rincian_long['📈 EMA'] = f"🟢 UPTREND {lvl} (+{bobot}) | H+{jarak_h_ema50:.2f}% EMA50+{jarak_ema50_200:.2f}%"
+        rincian_long['📈 EMA'] = f"🟢 UPTREND {lvl} (+{bobot}) | H+{jarak_h_ema50:.2f}%"
     else:
         rincian_long['📈 EMA'] = f"⚪ Tidak aktif | H-EMA50: {jarak_h_ema50:+.2f}%"
 
     # 2. MACD LONG (bobot 25-35)
     macd_long = macd_line > macd_sig and macd_hist > 0
     if macd_long:
-        if hist_ratio > 2.0:   bobot = 35; lvl = f"💪 SANGAT KUAT ({hist_ratio:.1f}x)"
-        elif hist_ratio > 1.0: bobot = 30; lvl = f"✊ KUAT ({hist_ratio:.1f}x)"
+        if hist_ratio > 1.5:   bobot = 35; lvl = f"💪 SANGAT KUAT ({hist_ratio:.1f}x)"
+        elif hist_ratio > 0.8: bobot = 30; lvl = f"✊ KUAT ({hist_ratio:.1f}x)"
         else:                  bobot = 25; lvl = f"👌 NORMAL ({hist_ratio:.1f}x)"
         skor_long += bobot; confluence_long += 1
         rincian_long['📈 MACD'] = f"🟢 BULLISH {lvl} (+{bobot})"
@@ -675,8 +650,8 @@ def hitung_skor_teknikal(bar, df, idx):
     obv_long = obv > obv_ema
     if obv_long:
         d = abs(obv_diverge_pct)
-        if d > 5:   bobot = 25; lvl = f"💪 KUAT (+{obv_diverge_pct:.1f}%)"
-        elif d > 2: bobot = 22; lvl = f"✊ SEDANG (+{obv_diverge_pct:.1f}%)"
+        if d > 3:   bobot = 25; lvl = f"💪 KUAT (+{obv_diverge_pct:.1f}%)"
+        elif d > 1: bobot = 22; lvl = f"✊ SEDANG (+{obv_diverge_pct:.1f}%)"
         else:       bobot = 20; lvl = f"👌 LEMAH (+{obv_diverge_pct:.1f}%)"
         skor_long += bobot; confluence_long += 1
         rincian_long['📈 OBV'] = f"🟢 TEKANAN BELI {lvl} (+{bobot})"
@@ -688,22 +663,22 @@ def hitung_skor_teknikal(bar, df, idx):
     # =========================================================================
 
     # 1. EMA Trend SHORT (bobot 30-40)
-    ema_short = (h < ema50 * (1 - MARGIN_EMA)) and (ema50 < ema200 * (1 - MARGIN_EMA))
+    ema_short = (h < ema50 * (1 - MARGIN_EMA)) and (ema50 < ema200)
     if ema_short:
         d = abs(jarak_h_ema50)
-        if d > 1.0:   bobot = 40; lvl = "💪 SANGAT KUAT"
-        elif d > 0.5: bobot = 35; lvl = "✊ KUAT"
+        if d > 0.8:   bobot = 40; lvl = "💪 SANGAT KUAT"
+        elif d > 0.4: bobot = 35; lvl = "✊ KUAT"
         else:         bobot = 30; lvl = "👌 NORMAL"
         skor_short += bobot; confluence_short += 1
-        rincian_short['📉 EMA'] = f"🔴 DOWNTREND {lvl} (+{bobot}) | H{jarak_h_ema50:.2f}% EMA50{jarak_ema50_200:.2f}%"
+        rincian_short['📉 EMA'] = f"🔴 DOWNTREND {lvl} (+{bobot}) | H{jarak_h_ema50:.2f}%"
     else:
         rincian_short['📉 EMA'] = f"⚪ Tidak aktif | H-EMA50: {jarak_h_ema50:+.2f}%"
 
     # 2. MACD SHORT (bobot 25-35)
     macd_short = macd_line < macd_sig and macd_hist < 0
     if macd_short:
-        if hist_ratio > 2.0:   bobot = 35; lvl = f"💪 SANGAT KUAT ({hist_ratio:.1f}x)"
-        elif hist_ratio > 1.0: bobot = 30; lvl = f"✊ KUAT ({hist_ratio:.1f}x)"
+        if hist_ratio > 1.5:   bobot = 35; lvl = f"💪 SANGAT KUAT ({hist_ratio:.1f}x)"
+        elif hist_ratio > 0.8: bobot = 30; lvl = f"✊ KUAT ({hist_ratio:.1f}x)"
         else:                  bobot = 25; lvl = f"👌 NORMAL ({hist_ratio:.1f}x)"
         skor_short += bobot; confluence_short += 1
         rincian_short['📉 MACD'] = f"🔴 BEARISH {lvl} (+{bobot})"
@@ -711,21 +686,20 @@ def hitung_skor_teknikal(bar, df, idx):
         rincian_short['📉 MACD'] = f"⚪ Tidak aktif | hist: {macd_hist:.2f}"
 
     # 3. RSI Overbought SHORT (bobot 25-35)
-    # Ini indikator paling aligned dengan ML untuk SHORT
-    rsi_turun_konsisten = rsi < rsi_c1 and rsi_c1 < rsi_cn
-    rsi_short_ok = rsi > 65 and rsi_turun_konsisten
+    # DILONGGARKAN: Hanya butuh 1 candle turun dari area > 60
+    rsi_turun = rsi < rsi_c1
+    rsi_short_ok = rsi > 60 and rsi_turun
     if rsi_short_ok:
-        if rsi > 80:   bobot = 35; lvl = f"💪 EKSTREM ({rsi:.1f})"
-        elif rsi > 75: bobot = 30; lvl = f"✊ TINGGI ({rsi:.1f})"
+        if rsi > 75:   bobot = 35; lvl = f"💪 EKSTREM ({rsi:.1f})"
+        elif rsi > 68: bobot = 30; lvl = f"✊ TINGGI ({rsi:.1f})"
         else:          bobot = 25; lvl = f"👌 OB ({rsi:.1f})"
         skor_short += bobot; confluence_short += 1
-        rincian_short[f'📉 RSI'] = f"🔴 OVERBOUGHT TURUN {lvl} (+{bobot}) | {rsi_cn:.1f}→{rsi_c1:.1f}→{rsi:.1f}"
+        rincian_short[f'📉 RSI'] = f"🔴 OVERBOUGHT TURUN {lvl} (+{bobot})"
     else:
-        rincian_short[f'📉 RSI'] = f"⚪ Tidak aktif | {rsi_cn:.1f}→{rsi_c1:.1f}→{rsi:.1f}"
+        rincian_short[f'📉 RSI'] = f"⚪ Tidak aktif | RSI: {rsi:.1f}"
 
     # =========================================================================
-    # CONFLUENCE BONUS (maks 3 indikator per arah)
-    # 1 agree → +0, 2 agree → +15, 3 agree → +30
+    # CONFLUENCE BONUS
     # =========================================================================
     TABEL_BONUS  = {1: 0, 2: 15, 3: 30}
     bonus_long   = TABEL_BONUS.get(confluence_long,  0)
@@ -745,15 +719,12 @@ def hitung_skor_teknikal(bar, df, idx):
     # =========================================================================
     rincian = {}
     rincian['─── BULLISH ───'] = ''
-    for k, v in rincian_long.items():
-        rincian[k] = v
+    for k, v in rincian_long.items():  rincian[k] = v
     rincian['─── BEARISH ───'] = ''
-    for k, v in rincian_short.items():
-        rincian[k] = v
+    for k, v in rincian_short.items(): rincian[k] = v
     rincian['🔥 Confluence'] = bonus_info
     rincian['📊 Skor'] = (
-        f"LONG {skor_long} (base {skor_long - bonus_long if confluence_long > confluence_short else skor_long}) | "
-        f"SHORT {skor_short} (base {skor_short - bonus_short if confluence_short > confluence_long else skor_short})"
+        f"LONG {skor_long} | SHORT {skor_short}"
     )
 
     return min(skor_long, 130), min(skor_short, 130), rincian
