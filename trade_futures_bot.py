@@ -64,6 +64,9 @@ from binance.error import ClientError
 # ── Supabase ──────────────────────────────────────────────
 from supabase import create_client, Client as SupabaseClient
 
+# ── Groq SDK ──────────────────────────────────────────────
+from groq import Groq
+
 # ── Technical Analysis ────────────────────────────────────
 from ta.momentum  import RSIIndicator
 from ta.trend     import MACD
@@ -77,6 +80,10 @@ from sklearn.pipeline     import Pipeline
 from sklearn.metrics      import classification_report
 
 warnings.filterwarnings("ignore")
+
+# Muat .env dengan path eksplisit — wajib untuk Windows compatibility
+_env_path = Path(__file__).parent / ".env"
+load_dotenv(dotenv_path=_env_path, override=True)
 
 # ─────────────────────────────────────────────────────────
 # LOGGING
@@ -98,26 +105,25 @@ log = logging.getLogger(__name__)
 
 class Config:
 
-    load_dotenv()   # Baca file .env otomatis dari direktori yang sama
-
-    # ── OpenRouter API ────────────────────────────────────────────────
-    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")   # dari openrouter.ai/settings/keys
+    # ── Groq API (FREE — 14.400 req/hari) ───────────────────────────────
+    GROQ_API_KEY       = (os.getenv("GROQ_API_KEY") or "").strip()       # dari console.groq.com/keys
 
     # ── Binance Futures ───────────────────────────────────────────────
-    BINANCE_API_KEY    = os.getenv("BINANCE_DEMO_API_KEY")
-    BINANCE_API_SECRET = os.getenv("BINANCE_DEMO_SECRET_KEY")
+    BINANCE_API_KEY    = (os.getenv("BINANCE_DEMO_API_KEY") or "").strip()
+    BINANCE_API_SECRET = (os.getenv("BINANCE_DEMO_SECRET_KEY") or "").strip()
     #   Testnet : "https://testnet.binancefuture.com"
     #   Live    : "https://fapi.binance.com"
     BINANCE_BASE_URL   = "https://testnet.binancefuture.com"
 
     # ── Supabase ──────────────────────────────────────────────────────
-    SUPABASE_URL       = os.getenv("SUPABASE_URL")
-    SUPABASE_KEY       = os.getenv("SUPABASE_KEY")
+    SUPABASE_URL       = (os.getenv("SUPABASE_URL") or "").strip()
+    SUPABASE_KEY       = (os.getenv("SUPABASE_KEY") or "").strip()
     SUPABASE_TABLE     = "trades"
 
     # ── Symbol & Timeframe ────────────────────────────────────────────
     SYMBOL             = "BTCUSDT"      # Format Binance (tanpa slash)
-    TF_SIGNAL          = "15m"          # Sinyal entry utama
+    TF_TRIGGER         = "5m"           # Timeframe trigger — deteksi pergerakan cepat
+    TF_SIGNAL          = "15m"          # Timeframe sinyal utama — keputusan entry
     TF_TREND           = "1h"           # Konfirmasi bias tren
     TF_ML              = "1h"           # Timeframe training ML (1H-4H optimal)
 
@@ -134,10 +140,19 @@ class Config:
     TRAIN_YEARS        = 3              # Ambil 3 tahun data historis
 
     # ── Threshold Sinyal ──────────────────────────────────────────────
-    RSI_OVERSOLD       = 35
-    RSI_OVERBOUGHT     = 65
+    RSI_OVERSOLD       = 40
+    RSI_OVERBOUGHT     = 60
     ML_CONFIDENCE      = 0.60           # ML harus ≥60% yakin sebelum entry
     VWAP_BAND_PCT      = 0.001          # 0.1% buffer zona netral VWAP
+
+    # ── Early Entry (5m aggressive mode) ──────────────────────────────
+    # Kalau 5m deteksi sinyal SANGAT kuat, entry tanpa tunggu candle 15m tutup
+    EARLY_ENTRY_ENABLED       = True
+    EARLY_ENTRY_MIN_PRICE_CHG = 0.25    # Min perubahan harga 3 candle 5m (%)
+    EARLY_ENTRY_VOL_SPIKE     = True    # Wajib ada volume spike
+    EARLY_ENTRY_RSI_LONG      = 40      # RSI 5m lebih ketat dari oversold normal
+    EARLY_ENTRY_RSI_SHORT     = 60      # RSI 5m lebih ketat dari overbought normal
+    EARLY_ENTRY_AI_CONF       = 0.65    # AI harus lebih yakin untuk early entry
 
 
 # ╔══════════════════════════════════════════════════════════════════════╗
@@ -389,6 +404,71 @@ class DataFetcher:
         """
         raw = self.client.klines(symbol=symbol, interval=interval, limit=limit)
         return self._parse_klines(raw)
+
+    # ── OHLCV 5m context (untuk trigger cepat) ───────────────────────
+    def fetch_5m_context(self, symbol: str) -> dict:
+        """
+        Ambil konteks pergerakan cepat dari candle 5m terkini.
+        Dipakai sebagai early warning — bukan sinyal entry, tapi trigger
+        untuk mendeteksi momentum mendadak sebelum candle 15m terbentuk.
+
+        Return dict berisi:
+          - price_change_5m    : perubahan harga 3 candle 5m terakhir (%)
+          - rsi_5m             : RSI di timeframe 5m
+          - volume_spike_5m    : apakah volume 5m signifikan (Z-score > 1.5)
+          - momentum_5m        : arah momentum (bullish/bearish/neutral)
+          - candles_since_15m  : sudah berapa candle 5m sejak candle 15m terakhir
+        """
+        try:
+            raw   = self.client.klines(symbol=symbol, interval="5m", limit=30)
+            df    = self._parse_klines(raw)
+
+            # RSI 5m
+            from ta.momentum import RSIIndicator
+            rsi_5m = RSIIndicator(df["close"], window=14).rsi().iloc[-1]
+
+            # Perubahan harga 3 candle 5m terakhir (±15 menit)
+            price_now  = float(df["close"].iloc[-1])
+            price_3ago = float(df["close"].iloc[-4])
+            price_change_pct = (price_now - price_3ago) / price_3ago * 100
+
+            # Volume Z-score 5m
+            vol_mean = df["volume"].rolling(20).mean().iloc[-1]
+            vol_std  = df["volume"].rolling(20).std().iloc[-1] + 1e-8
+            vol_z    = (float(df["volume"].iloc[-1]) - vol_mean) / vol_std
+
+            # Momentum label
+            if price_change_pct > 0.15:
+                momentum = "bullish_surge"
+            elif price_change_pct < -0.15:
+                momentum = "bearish_drop"
+            else:
+                momentum = "neutral"
+
+            # Estimasi posisi dalam siklus 15m (1 candle 15m = 3 candle 5m)
+            # Candle 5m ke berapa sejak candle 15m terakhir mulai (0, 1, atau 2)
+            import time as _time
+            now_sec       = int(_time.time())
+            sec_in_15m    = now_sec % (15 * 60)
+            candle_pos    = sec_in_15m // (5 * 60)   # 0 = baru mulai, 2 = mau tutup
+
+            return {
+                "price_change_3c_pct" : round(price_change_pct, 3),
+                "rsi_5m"              : round(float(rsi_5m), 2),
+                "volume_zscore_5m"    : round(float(vol_z), 3),
+                "volume_spike"        : bool(vol_z > 1.5),
+                "momentum_5m"         : momentum,
+                "candle_pos_in_15m"   : int(candle_pos),  # 0/1/2
+                "near_15m_close"      : bool(candle_pos == 2),  # True = candle 15m mau tutup
+            }
+        except Exception as e:
+            log.warning(f"⚠️  Gagal ambil 5m context: {e}")
+            return {
+                "price_change_3c_pct": 0.0, "rsi_5m": 50.0,
+                "volume_zscore_5m": 0.0, "volume_spike": False,
+                "momentum_5m": "neutral", "candle_pos_in_15m": 0,
+                "near_15m_close": False,
+            }
 
     # ── OHLCV bulk historis (untuk training ML) ───────────────────────
     def fetch_ohlcv_bulk(self, symbol: str, interval: str, years: int = 3) -> pd.DataFrame:
@@ -769,12 +849,12 @@ class MLModel:
 
 
 # ╔══════════════════════════════════════════════════════════════════════╗
-# ║              7. AI DECISION ENGINE (OpenRouter — gpt-oss-120b)      ║
+# ║              7. AI DECISION ENGINE (Groq — llama-3.3-70b, FREE)     ║
 # ╚══════════════════════════════════════════════════════════════════════╝
 
 class AIDecisionEngine:
     """
-    Keputusan trading dari OpenRouter API (model: openai/gpt-oss-120b).
+    Keputusan trading dari Groq API (model: llama-3.3-70b-versatile).
 
     Semua data teknikal (VWAP, RSI, MACD, ATR, price action, funding rate,
     open interest, dan prediksi ML) dikirim sebagai konteks.
@@ -785,16 +865,16 @@ class AIDecisionEngine:
         "reasoning"  : "penjelasan singkat keputusan"
       }
 
-    OpenRouter:
-      - Akses ke ratusan model via satu endpoint
-      - $1 kredit gratis saat daftar
-      - Daftar API key: openrouter.ai/settings/keys
-      - Ganti model di Config.MODEL sesuai kebutuhan
+    Groq FREE tier (permanen, tidak perlu kartu kredit):
+      - 14.400 request/hari  (bot pakai ~96/hari → sangat aman)
+      - 30 request/menit
+      - Response sangat cepat (~0.3 detik karena LPU hardware)
+      - Daftar API key gratis: console.groq.com/keys
     """
 
-    # OpenRouter endpoint — OpenAI-compatible format
-    OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-    MODEL              = "openai/gpt-oss-120b"
+    # Groq endpoint — OpenAI-compatible format (sama persis dengan OpenAI SDK)
+    GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+    MODEL        = "llama-3.3-70b-versatile"
 
     # System instruction — dikirim sebagai systemInstruction di Gemini API
     SYSTEM_PROMPT = """Kamu adalah analis trading algoritmik di Binance Futures.
@@ -804,16 +884,20 @@ Format WAJIB (satu baris, tanpa newline):
 Aturan: action hanya LONG/SHORT/HOLD, confidence 0.0-1.0, reasoning maksimal 10 kata."""
 
     def __init__(self, api_key: str):
-        self.api_key          = api_key
+        self.api_key          = (api_key or "").strip()
         self._last_reasoning  = ""
-        self._site_url        = "https://github.com/trading-bot"   # Opsional: untuk OpenRouter analytics
-        self._app_name        = "AlgoTradingBot"
+        # Log prefix key untuk membantu debug (aman, tidak tampilkan key penuh)
+        prefix = self.api_key[:8] if len(self.api_key) >= 8 else "KOSONG"
+        log.info(f"🔑 Groq API key prefix: {prefix}... (panjang: {len(self.api_key)} karakter)")
+        if not self.api_key.startswith("gsk_"):
+            log.warning("⚠️  GROQ_API_KEY tidak diawali 'gsk_' — pastikan key benar di .env!")
 
     @staticmethod
     def _build_snapshot(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
                         ml_result: dict, open_positions: list,
                         balance: float, funding_rate: float,
-                        open_interest: float) -> dict:
+                        open_interest: float,
+                        ctx_5m: dict = None) -> dict:
         """
         Kumpulkan semua data relevan menjadi satu snapshot pasar
         yang akan dikirim ke Claude sebagai konteks.
@@ -906,6 +990,16 @@ Aturan: action hanya LONG/SHORT/HOLD, confidence 0.0-1.0, reasoning maksimal 10 
                 "above_threshold" : ml_result["confidence"] >= Config.ML_CONFIDENCE,
             },
 
+            # ── Early Warning 5m ────────────────────────────────────
+            # Data 5m dipakai sebagai konteks tambahan, bukan sinyal utama.
+            # Membantu AI mendeteksi momentum mendadak sebelum candle 15m tutup.
+            "trigger_5m": ctx_5m or {
+                "price_change_3c_pct": 0.0, "rsi_5m": 50.0,
+                "volume_zscore_5m": 0.0, "volume_spike": False,
+                "momentum_5m": "neutral", "candle_pos_in_15m": 0,
+                "near_15m_close": False,
+            },
+
             # ── Kondisi Akun ─────────────────────────────────────────
             "account": {
                 "balance_usdt"    : round(balance, 2),
@@ -917,15 +1011,13 @@ Aturan: action hanya LONG/SHORT/HOLD, confidence 0.0-1.0, reasoning maksimal 10 
             },
         }
 
-    def _call_openrouter(self, snapshot: dict) -> dict:
+    def _call_groq(self, snapshot: dict) -> dict:
         """
-        Kirim snapshot ke OpenRouter API (OpenAI-compatible).
-        Auth: Bearer token di header Authorization.
+        Kirim snapshot ke Groq API pakai official Groq Python SDK.
+        Lebih andal dari urllib — auth dan error handling sudah ditangani SDK.
         Return: {"action": str, "confidence": float, "reasoning": str}
         """
         import json
-        import urllib.request
-        import urllib.error
 
         user_message = (
             "Analisis data pasar berikut dan buat keputusan trading:\n\n"
@@ -933,38 +1025,28 @@ Aturan: action hanya LONG/SHORT/HOLD, confidence 0.0-1.0, reasoning maksimal 10 
             "Berikan keputusan trading dalam format JSON yang diminta."
         )
 
-        payload = json.dumps({
-            "model"      : self.MODEL,
-            "messages"   : [
-                {"role": "system", "content": self.SYSTEM_PROMPT},
-                {"role": "user",   "content": user_message},
-            ],
-            "max_tokens" : 256,
-            "temperature": 0.1,
-        }).encode("utf-8")
-
-        headers = {
-            "Content-Type" : "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-            "HTTP-Referer" : self._site_url,   # Opsional, untuk OpenRouter dashboard
-            "X-Title"      : self._app_name,   # Opsional, label di OpenRouter
-        }
-
         for attempt in range(1, 4):
             try:
-                req = urllib.request.Request(
-                    self.OPENROUTER_API_URL, data=payload, headers=headers
+                client = Groq(api_key=self.api_key)
+
+                completion = client.chat.completions.create(
+                    model             = self.MODEL,
+                    messages          = [
+                        {"role": "system", "content": self.SYSTEM_PROMPT},
+                        {"role": "user",   "content": user_message},
+                    ],
+                    temperature       = 0.1,
+                    max_completion_tokens = 256,
+                    top_p             = 1,
+                    stream            = False,   # Non-streaming untuk kemudahan parse
+                    stop              = None,
                 )
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    body = json.loads(resp.read().decode("utf-8"))
 
-                log.debug(f"OpenRouter raw: {str(body)[:400]}")
-
-                # OpenAI-compatible: choices[0].message.content
-                raw_text = body["choices"][0]["message"]["content"].strip()
+                raw_text = completion.choices[0].message.content.strip()
+                log.debug(f"Groq raw: {raw_text[:300]}")
 
                 if not raw_text:
-                    log.warning(f"⚠️  OpenRouter response kosong (attempt {attempt}/3)")
+                    log.warning(f"⚠️  Groq response kosong (attempt {attempt}/3)")
                     time.sleep(3 * attempt)
                     continue
 
@@ -993,45 +1075,43 @@ Aturan: action hanya LONG/SHORT/HOLD, confidence 0.0-1.0, reasoning maksimal 10 
                     "reasoning" : str(decision.get("reasoning", "–")),
                 }
 
-            except urllib.error.HTTPError as e:
-                try:
-                    err_body = json.loads(e.read().decode("utf-8"))
-                    err_msg  = err_body.get("error", {}).get("message", str(e))
-                except Exception:
-                    err_msg = str(e)
-                log.warning(f"⚠️  OpenRouter HTTP {e.code} (attempt {attempt}/3): {err_msg}")
-                if e.code == 429:
-                    time.sleep(10 * attempt)
-                elif e.code in (400, 401, 403):
-                    log.error(f"❌ OpenRouter error fatal ({e.code}) — tidak di-retry.")
-                    break
-                else:
-                    time.sleep(3 * attempt)
-
-            except (json.JSONDecodeError, KeyError) as e:
-                log.warning(f"⚠️  Gagal parse response OpenRouter (attempt {attempt}/3): {e}")
+            except json.JSONDecodeError as e:
+                log.warning(f"⚠️  Gagal parse JSON Groq (attempt {attempt}/3): {e} | raw={raw_text[:100]}")
                 time.sleep(3)
 
             except Exception as e:
-                log.warning(f"⚠️  Error OpenRouter API (attempt {attempt}/3): {e}")
-                time.sleep(3 * attempt)
+                err_str = str(e)
+                log.warning(f"⚠️  Error Groq SDK (attempt {attempt}/3): {err_str}")
+                # Groq SDK raise AuthenticationError untuk 401/403
+                if "401" in err_str or "403" in err_str or "authentication" in err_str.lower():
+                    log.error("❌ Groq API key tidak valid — periksa GROQ_API_KEY di .env!")
+                    break
+                elif "429" in err_str or "rate" in err_str.lower():
+                    log.warning("⚠️  Groq rate limit — tunggu sebentar...")
+                    time.sleep(10 * attempt)
+                else:
+                    time.sleep(3 * attempt)
 
-        log.error("❌ OpenRouter gagal setelah 3 percobaan. Fallback ke HOLD.")
+        log.error("❌ Groq API gagal setelah 3 percobaan. Fallback ke HOLD.")
         return {"action": "HOLD", "confidence": 0.0, "reasoning": "API tidak tersedia"}
+
+
 
     def compute(self, df_15m: pd.DataFrame, df_1h: pd.DataFrame,
                 ml_result: dict, open_positions: list,
                 balance: float, funding_rate: float,
-                open_interest: float) -> dict:
+                open_interest: float,
+                ctx_5m: dict = None) -> dict:
         """
-        Entry point utama — bangun snapshot, kirim ke OpenRouter, return keputusan.
+        Entry point utama — bangun snapshot, kirim ke Groq, return keputusan.
+        ctx_5m: konteks 5m dari DataFetcher.fetch_5m_context()
         """
         snapshot = self._build_snapshot(
             df_15m, df_1h, ml_result, open_positions,
-            balance, funding_rate, open_interest
+            balance, funding_rate, open_interest, ctx_5m
         )
 
-        decision = self._call_openrouter(snapshot)
+        decision = self._call_groq(snapshot)
         self._last_reasoning = decision["reasoning"]
 
         log.info(
@@ -1520,7 +1600,7 @@ class TradingBot:
         self.ml       = MLModel()
         self.orders   = OrderManager(self.fetcher, self.db)
         self.monitor  = PositionMonitor(self.fetcher, self.db)
-        self.ai       = AIDecisionEngine(Config.OPENROUTER_API_KEY)
+        self.ai       = AIDecisionEngine(Config.GROQ_API_KEY)
         self._cycle   = 0
         # Daftarkan handler shutdown — harus setelah fetcher & db siap
         self.shutdown = GracefulShutdown(self.fetcher, self.db)
@@ -1545,10 +1625,67 @@ class TradingBot:
         # Tampilkan statistik awal dari database
         self.db.get_stats()
 
+    def _check_early_entry(self, ctx_5m: dict) -> bool:
+        """
+        Deteksi apakah kondisi 5m cukup kuat untuk early entry
+        tanpa menunggu candle 15m tutup.
+
+        Syarat SEMUA harus terpenuhi:
+          1. Early entry diaktifkan di Config
+          2. Candle 15m baru mulai (posisi 0 atau 1 dari 3)
+          3. Ada volume spike signifikan
+          4. Perubahan harga 3 candle 5m melebihi threshold
+          5. RSI 5m di zona ekstrem
+
+        Return True → langsung proses sinyal meski candle 15m belum tutup
+        Return False → tunggu seperti biasa
+        """
+        if not Config.EARLY_ENTRY_ENABLED:
+            return False
+
+        # Hanya aktif di awal candle 15m (posisi 0 atau 1)
+        # Kalau posisi 2, candle 15m mau tutup → normal flow saja
+        if ctx_5m["candle_pos_in_15m"] == 2:
+            return False
+
+        # Syarat volume spike wajib ada
+        if Config.EARLY_ENTRY_VOL_SPIKE and not ctx_5m["volume_spike"]:
+            return False
+
+        price_chg = abs(ctx_5m["price_change_3c_pct"])
+        rsi_5m    = ctx_5m["rsi_5m"]
+        momentum  = ctx_5m["momentum_5m"]
+
+        # Perubahan harga harus signifikan
+        if price_chg < Config.EARLY_ENTRY_MIN_PRICE_CHG:
+            return False
+
+        # RSI harus di zona ekstrem
+        rsi_extreme = (
+            rsi_5m <= Config.EARLY_ENTRY_RSI_LONG or
+            rsi_5m >= Config.EARLY_ENTRY_RSI_SHORT
+        )
+        if not rsi_extreme:
+            return False
+
+        # Momentum harus jelas (bukan neutral)
+        if momentum == "neutral":
+            return False
+
+        log.info(
+            f"⚡ EARLY ENTRY TRIGGERED! "
+            f"price_chg={price_chg:+.3f}% | "
+            f"RSI_5m={rsi_5m:.1f} | "
+            f"momentum={momentum} | "
+            f"vol_spike={ctx_5m['volume_spike']} | "
+            f"posisi={ctx_5m['candle_pos_in_15m']}/2"
+        )
+        return True
+
     def run_once(self):
         """
-        Satu siklus lengkap setiap 15 menit:
-          sync → fetch → feature → predict → signal → order
+        Satu siklus lengkap setiap 5 menit:
+          sync → fetch → early_entry_check → feature → predict → signal → order
 
         Siklus dibatalkan kalau bot sedang dalam proses shutdown.
         """
@@ -1564,41 +1701,76 @@ class TradingBot:
             # 1. Sinkron posisi yang sudah close di Binance ke Supabase
             self.monitor.sync()
 
-            # 2. Ambil data OHLCV terbaru
+            # 2. Ambil data OHLCV — 3 timeframe sekaligus
+            df_5m  = None   # Dipakai untuk context, tidak untuk sinyal utama
             df_15m = self.fetcher.fetch_ohlcv(Config.SYMBOL, Config.TF_SIGNAL, limit=300)
             df_1h  = self.fetcher.fetch_ohlcv(Config.SYMBOL, Config.TF_TREND,  limit=100)
             fr     = self.fetcher.fetch_funding_rate(Config.SYMBOL)
             oi     = self.fetcher.fetch_open_interest(Config.SYMBOL)
 
-            # 3. Feature engineering
+            # 3. Early warning context dari 5m (momentum cepat, volume spike)
+            ctx_5m = self.fetcher.fetch_5m_context(Config.SYMBOL)
+            log.info(
+                f"⚡ 5m context | momentum={ctx_5m['momentum_5m']:15s} | "
+                f"price_chg={ctx_5m['price_change_3c_pct']:+.3f}% | "
+                f"vol_spike={'YA' if ctx_5m['volume_spike'] else 'tidak':3s} | "
+                f"RSI_5m={ctx_5m['rsi_5m']:.1f} | "
+                f"posisi_15m={ctx_5m['candle_pos_in_15m']}/2"
+            )
+
+            # 4. Feature engineering pada data 15m & 1H
             df_15m = FeatureEngineer.build_features(df_15m, fr, oi)
             df_1h  = FeatureEngineer.build_features(df_1h,  fr, oi)
 
-            # 4. Prediksi ML (Random Forest + Gradient Boosting)
+            # 5. Prediksi ML (Random Forest + Gradient Boosting) — tetap pakai 15m
             ml_result = self.ml.predict(df_15m)
 
-            # 5. Ambil kondisi akun real-time untuk konteks AI
+            # 6. Ambil kondisi akun real-time untuk konteks AI
             balance      = self.fetcher.fetch_balance()
             open_pos     = self.fetcher.fetch_open_positions(Config.SYMBOL)
 
-            # 6. Keputusan AI — Claude membaca semua data dan output LONG/SHORT/HOLD
+            # 7. Cek early entry — apakah 5m sinyal cukup kuat untuk masuk sekarang?
+            is_early = self._check_early_entry(ctx_5m)
+
+            if not is_early and ctx_5m["candle_pos_in_15m"] < 2:
+                # Candle 15m belum matang DAN tidak ada early entry signal
+                # → skip AI call, hemat quota Groq
+                log.info(
+                    f"⏳ Skip analisis — candle 15m posisi {ctx_5m['candle_pos_in_15m']}/2 "
+                    f"(belum matang, tidak ada early entry signal)"
+                )
+                return
+
+            # 8. Keputusan AI — Groq membaca 15m + 5m context + ML
+            # Kalau early entry: AI dipaksa lebih ketat (confidence threshold naik)
             signal = self.ai.compute(
-                df_15m       = df_15m,
-                df_1h        = df_1h,
-                ml_result    = ml_result,
+                df_15m         = df_15m,
+                df_1h          = df_1h,
+                ml_result      = ml_result,
                 open_positions = open_pos,
-                balance      = balance,
-                funding_rate = fr,
-                open_interest = oi,
+                balance        = balance,
+                funding_rate   = fr,
+                open_interest  = oi,
+                ctx_5m         = ctx_5m,
             )
 
-            # 7. Eksekusi order (kalau tidak HOLD)
+            # Early entry: AI harus lebih yakin dari threshold normal
+            if is_early and signal["action"] != "HOLD":
+                if signal["ai_conf"] < Config.EARLY_ENTRY_AI_CONF:
+                    log.info(
+                        f"⏳ Early entry dibatalkan — AI confidence {signal['ai_conf']:.0%} "
+                        f"< threshold early entry {Config.EARLY_ENTRY_AI_CONF:.0%}"
+                    )
+                    return
+                log.info(f"🚀 EARLY ENTRY dieksekusi! AI confidence={signal['ai_conf']:.0%}")
+
+            # 9. Eksekusi order (kalau tidak HOLD)
             if signal["action"] != "HOLD":
                 self.orders.place_order(signal)
             else:
                 log.info("💤 HOLD — AI memutuskan tidak ada entry yang layak")
 
-            # 8. Tampilkan stats setiap 10 siklus
+            # 10. Tampilkan stats setiap 10 siklus
             if self._cycle % 10 == 0:
                 self.db.get_stats()
 
@@ -1612,9 +1784,9 @@ class TradingBot:
         # Langsung jalankan satu siklus pertama
         self.run_once()
 
-        # Jadwalkan tiap 15 menit
-        schedule.every(15).minutes.do(self.run_once)
-        log.info("⏰ Scheduler aktif — eksekusi tiap 15 menit")
+        # Jadwalkan tiap 5 menit — analisis lebih sering, sinyal tetap 15m
+        schedule.every(5).minutes.do(self.run_once)
+        log.info("⏰ Scheduler aktif — analisis tiap 5 menit | sinyal utama 15m")
 
         while True:
             schedule.run_pending()
