@@ -1,12 +1,49 @@
-# Trading Bot — Dependencies
+# ─────────────────────────────────────────────────────────────────────
+# Trading Bot — Python Dependencies
 # Install: pip install -r requirements.txt
+# Python  : >= 3.10
+# ─────────────────────────────────────────────────────────────────────
 
+# ── Exchange ──────────────────────────────────────────────────────────
 binance-futures-connector>=4.0.0   # Binance official SDK (UM Futures)
-supabase>=2.0.0                    # Supabase Python client
-pandas>=2.0.0
-numpy>=1.24.0
-ta>=0.11.0                         # Technical Analysis (RSI, MACD, ATR)
-scikit-learn>=1.4.0                # Random Forest & Gradient Boosting
-joblib>=1.3.0                      # Simpan/load model ke disk
-schedule>=1.2.0                    # Scheduler ringan non-blocking
-python-dotenv
+groq>=0.9.0                        # Groq official Python SDK (LLM inference)
+
+# ── Database ──────────────────────────────────────────────────────────
+supabase>=2.0.0                    # Supabase Python client (history + winrate)
+
+# ── Environment Variables ─────────────────────────────────────────────
+python-dotenv>=1.0.0               # Baca kredensial dari file .env
+
+# ── Data & Numerik ────────────────────────────────────────────────────
+pandas>=2.0.0                      # Manipulasi DataFrame OHLCV
+numpy>=1.24.0                      # Kalkulasi numerik (log return, dll)
+
+# ── Technical Analysis ────────────────────────────────────────────────
+ta>=0.11.0                         # RSI, MACD, ATR (wrapper pandas-based)
+
+# ── Machine Learning ──────────────────────────────────────────────────
+scikit-learn>=1.4.0                # Random Forest, Gradient Boosting, Pipeline
+joblib>=1.3.0                      # Simpan / load model ke disk (.pkl)
+
+# ── Scheduler ─────────────────────────────────────────────────────────
+schedule>=1.2.0                    # Scheduler ringan non-blocking (tiap 15m)
+
+# ─────────────────────────────────────────────────────────────────────
+# CATATAN: Modul berikut TIDAK perlu diinstall (sudah built-in Python):
+#   os           — os.getenv() untuk baca variabel dari .env
+#   signal       — tangkap SIGINT/SIGTERM/SIGHUP untuk graceful shutdown
+#   atexit       — fallback cleanup saat proses exit
+#   sys          — sys.exit() saat shutdown
+#   json         — parse response JSON dari Groq API
+#   urllib       — HTTP request ke Groq (tanpa library tambahan)
+#   logging      — pencatatan log ke console + file
+#   time         — sleep & rate limiting
+#   warnings     — filter warning sklearn
+#   pathlib      — Path() untuk lokasi file model
+#   datetime     — konversi timestamp UTC
+#
+# API KEY YANG DIBUTUHKAN:
+#   1. Binance API Key + Secret → binance.com/en/my/settings/api-management
+#   2. Supabase URL + Anon Key  → supabase.com/dashboard → Settings → API
+#   3. Groq API Key (GRATIS)    → console.groq.com/keys
+# ─────────────────────────────────────────────────────────────────────
