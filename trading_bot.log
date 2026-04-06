@@ -214,3 +214,13 @@
 2026-04-05 00:06:46,629 | INFO | 💬 Reasoning: price below 1h VWAP, neutral indicators, hold
 2026-04-05 00:06:46,629 | INFO | 💤 HOLD — AI memutuskan tidak ada entry yang layak
 2026-04-05 00:06:46,630 | INFO | ⏰ Scheduler aktif — eksekusi tiap 15 menit
+2026-04-05 00:10:32,392 | WARNING | 
+⚠️  Sinyal SIGINT diterima — memulai graceful shutdown...
+2026-04-05 00:10:32,392 | INFO | ============================================================
+2026-04-05 00:10:32,392 | INFO | 🔴 GRACEFUL SHUTDOWN — Menutup semua posisi terbuka...
+2026-04-05 00:10:32,393 | INFO | ============================================================
+2026-04-05 00:10:32,509 | INFO | ℹ️  Tidak ada posisi terbuka — tidak ada yang perlu ditutup.
+2026-04-05 00:10:32,983 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-05 00:10:33,116 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-05 00:10:33,117 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-05 00:10:33,119 | INFO | ✅ Semua posisi berhasil ditutup. Bot berhenti dengan aman.
