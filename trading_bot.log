@@ -552,3 +552,47 @@
 2026-04-06 08:07:58,838 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
 2026-04-06 08:07:58,839 | INFO | 📊 Belum ada trade yang selesai.
 2026-04-06 08:07:58,840 | INFO | ✅ Semua posisi berhasil ditutup. Bot berhenti dengan aman.
+2026-04-06 08:36:37,274 | INFO | ✅ Binance Futures (TESTNET ⚠️) — terhubung
+2026-04-06 08:36:37,843 | INFO | ✅ Supabase — terhubung
+2026-04-06 08:36:37,846 | INFO | 🔑 Groq API key prefix: gsk_l76D... (panjang: 56 karakter)
+2026-04-06 08:36:37,848 | INFO | 🛡️  GracefulShutdown terdaftar (SIGINT / SIGTERM / SIGHUP / atexit)
+2026-04-06 08:36:37,849 | INFO | 🚀 TradingBot dimulai!
+2026-04-06 08:36:37,850 | INFO | 🧠 Belum ada model tersimpan. Mulai training...
+2026-04-06 08:36:37,852 | INFO | 📥 Bulk fetch: BTCUSDT 1h — 3 tahun terakhir...
+2026-04-06 08:36:52,463 | INFO | ✅ Bulk fetch selesai — 26,252 baris
+2026-04-06 08:36:53,131 | INFO | 🧠 Training pada 26,219 sampel...
+2026-04-06 08:37:09,077 | INFO |   RF  F1-macro: 0.440 ± 0.031
+2026-04-06 08:44:51,280 | INFO |   GB  F1-macro: 0.404 ± 0.036
+2026-04-06 08:44:51,821 | INFO | 
+              precision    recall  f1-score   support
+
+       SHORT       0.48      0.52      0.50      7773
+        HOLD       0.56      0.50      0.53     10245
+        LONG       0.50      0.53      0.52      8201
+
+    accuracy                           0.52     26219
+   macro avg       0.52      0.52      0.52     26219
+weighted avg       0.52      0.52      0.52     26219
+
+2026-04-06 08:44:52,144 | INFO | 💾 Model disimpan → model_trading.pkl
+2026-04-06 08:44:53,574 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-06 08:44:53,581 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-06 08:44:53,583 | INFO | ────────────────────────────────────────────────────────────
+2026-04-06 08:44:53,584 | INFO | 🔁 Siklus #1 — 2026-04-06 01:44 UTC
+2026-04-06 08:44:53,735 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-06 08:44:55,619 | INFO | ⚡ 5m context | momentum=neutral         | price_chg=-0.149% | vol_spike=tidak | RSI_5m=41.1 | posisi_15m=2/2
+2026-04-06 08:44:57,598 | INFO | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-06 08:44:57,665 | INFO | 🤖 AI Decision=HOLD  | confidence=75% | ML=0(48%) | RSI=64.9 | ATR=188.91
+2026-04-06 08:44:57,666 | INFO | 💬 Reasoning: RSI overbought
+2026-04-06 08:44:57,668 | INFO | 💤 HOLD — AI memutuskan tidak ada entry yang layak
+2026-04-06 08:44:57,669 | INFO | ⏰ Scheduler aktif — analisis tiap 5 menit | sinyal utama 15m
+2026-04-06 08:49:33,199 | WARNING | 
+⚠️  Sinyal SIGINT diterima — memulai graceful shutdown...
+2026-04-06 08:49:33,201 | INFO | ============================================================
+2026-04-06 08:49:33,204 | INFO | 🔴 GRACEFUL SHUTDOWN — Menutup semua posisi terbuka...
+2026-04-06 08:49:33,205 | INFO | ============================================================
+2026-04-06 08:49:33,925 | INFO | ℹ️  Tidak ada posisi terbuka — tidak ada yang perlu ditutup.
+2026-04-06 08:49:34,418 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=%2A&status=eq.OPEN "HTTP/2 200 OK"
+2026-04-06 08:49:34,641 | INFO | HTTP Request: GET https://dqjvqyqntvvjqjarlrey.supabase.co/rest/v1/trades?select=status%2Cpnl%2Cpnl_pct%2Cside&status=neq.OPEN "HTTP/2 200 OK"
+2026-04-06 08:49:34,643 | INFO | 📊 Belum ada trade yang selesai.
+2026-04-06 08:49:34,643 | INFO | ✅ Semua posisi berhasil ditutup. Bot berhenti dengan aman.
